@@ -1,7 +1,6 @@
 /**
  * HealthContinuum AI — API Client
- * Seamlessly integrates Firebase (Cloud Firestore, Storage, Auth) as primary backend,
- * with FastAPI / local fallback.
+ * Uses the FastAPI API proxy; failed authentication never falls back to fake local users.
  */
 
 'use strict';
@@ -28,7 +27,7 @@ function setActivePatientId(id) {
 async function apiFetch(path, options = {}) {
   try {
     const res = await fetch(`${API_BASE}${path}`, {
-      headers: { 'Content-Type': 'application/json', ...options.headers },
+      headers: { 'Content-Type': 'application/json', ...(typeof localStorage !== 'undefined' && localStorage.getItem('hc_access_token') ? { Authorization: 'Bearer ' + localStorage.getItem('hc_access_token') } : {}), ...options.headers },
       ...options,
     });
     const json = await res.json();
@@ -42,10 +41,6 @@ async function apiFetch(path, options = {}) {
   }
 }
 
-function isFirebaseActive() {
-  return window.FirebaseConfig && window.FirebaseConfig.isConfigured();
-}
-
 // ─── Unified API functions ───────────────────────────────────────────────────
 const API = {
   setActivePatientId,
@@ -53,143 +48,32 @@ const API = {
 
   /** GET /health / Backend status */
   health: async () => {
-    if (isFirebaseActive()) {
-      return {
-        success: true,
-        data: {
-          status: 'ok',
-          backend: 'firebase',
-          projectId: window.FirebaseConfig.getApp()?.options?.projectId || 'active'
-        },
-        message: 'Firebase backend is connected'
-      };
-    }
+    
     return apiFetch('/health');
   },
 
-  /** POST /auth/login */
+  /** POST /auth/login — no local/demo token fallback. */
   login: async (identifier, password = '', rememberMe = true) => {
-    const res = await apiFetch('/auth/login', {
-      method: 'POST',
-      body: JSON.stringify({ identifier, password, remember_me: rememberMe }),
-    });
+    const res = await apiFetch('/auth/login', { method: 'POST', body: JSON.stringify({ identifier, password, remember_me: rememberMe }) });
     if (res?.success && res.data?.patient?.id) {
       setActivePatientId(res.data.patient.id);
-      return res;
+      try { localStorage.setItem('hc_access_token', res.data.access_token || ''); } catch (e) {}
     }
-
-    const isRamesh = identifier.toLowerCase().includes('ramesh') || identifier === 'HC-2024-00847';
-    const newId = isRamesh ? 'pat-ramesh-001' : 'pat-' + Math.random().toString(36).substring(2, 9);
-    const newUhid = isRamesh ? 'HC-2024-00847' : 'HC-' + Math.random().toString(36).substring(2, 8).toUpperCase();
-    const newName = isRamesh ? 'Ramesh Kumar' : (identifier.includes('@') ? identifier.split('@')[0].replace('.', ' ').replace('_', ' ').replace(/\b\w/g, c => c.toUpperCase()) : `Patient ${identifier.slice(-4)}`);
-
-    if (isFirebaseActive() && window.FirebaseService && identifier.includes('@')) {
-      try {
-        const userCred = await window.FirebaseService.signIn(identifier, password || 'password123');
-        const userPatientId = userCred.user?.uid ? `pat-${userCred.user.uid.substring(0, 8)}` : newId;
-        setActivePatientId(userPatientId);
-        return {
-          success: true,
-          data: {
-            access_token: 'fb-token-' + (userCred.user?.uid || 'user'),
-            patient: {
-              id: userPatientId,
-              name: userCred.user?.displayName || newName,
-              email: userCred.user?.email || identifier,
-              uhid: newUhid,
-            },
-          },
-          message: 'Signed in successfully via Firebase',
-        };
-      } catch (fbErr) {
-        console.warn('[Firebase Auth fallback]:', fbErr);
-      }
-    }
-
-    setActivePatientId(newId);
-    return {
-      success: true,
-      data: {
-        access_token: 'local-token-' + newId,
-        patient: {
-          id: newId,
-          name: newName,
-          email: identifier.includes('@') ? identifier : `${newId}@example.com`,
-          phone: !identifier.includes('@') ? identifier : '+91 98765 43210',
-          uhid: newUhid,
-        },
-      },
-      message: 'Signed in successfully',
-    };
+    return res;
   },
 
-  /** POST /auth/register */
-  register: async (name, email = '', phone = '', password = 'password123') => {
-    const res = await apiFetch('/auth/register', {
-      method: 'POST',
-      body: JSON.stringify({ name, email, phone, password }),
-    });
+  /** POST /auth/register — no local/demo token fallback. */
+  register: async (name, email = '', phone = '', password = '') => {
+    const res = await apiFetch('/auth/register', { method: 'POST', body: JSON.stringify({ name, email, phone, password }) });
     if (res?.success && res.data?.patient?.id) {
       setActivePatientId(res.data.patient.id);
-      return res;
+      try { localStorage.setItem('hc_access_token', res.data.access_token || ''); } catch (e) {}
     }
-
-    const newId = 'pat-' + Math.random().toString(36).substring(2, 9);
-    const newUhid = 'HC-' + Math.random().toString(36).substring(2, 8).toUpperCase();
-
-    if (isFirebaseActive() && window.FirebaseService && email) {
-      try {
-        const userCred = await window.FirebaseService.signUp(email, password, name);
-        const fbId = userCred.user?.uid ? `pat-${userCred.user.uid.substring(0, 8)}` : newId;
-        setActivePatientId(fbId);
-        return {
-          success: true,
-          data: {
-            access_token: 'fb-token-' + (userCred.user?.uid || 'user'),
-            patient: { id: fbId, name, email, uhid: newUhid },
-          },
-          message: 'Account created with Firebase',
-        };
-      } catch (e) {
-        console.warn('[Firebase SignUp]', e);
-      }
-    }
-
-    setActivePatientId(newId);
-    return {
-      success: true,
-      data: {
-        access_token: 'local-token-' + newId,
-        patient: { id: newId, name, email, phone, uhid: newUhid },
-      },
-      message: 'Account created successfully',
-    };
+    return res;
   },
 
-  /** POST /auth/google */
-  googleAuth: async (email, name, googleId = null) => {
-    const res = await apiFetch('/auth/google', {
-      method: 'POST',
-      body: JSON.stringify({ email, name, google_id: googleId }),
-    });
-    if (res?.success && res.data?.patient?.id) {
-      setActivePatientId(res.data.patient.id);
-      return res;
-    }
-
-    const isRamesh = email && email.toLowerCase().includes('ramesh');
-    const newId = isRamesh ? 'pat-ramesh-001' : 'pat-' + Math.random().toString(36).substring(2, 9);
-    const newUhid = isRamesh ? 'HC-2024-00847' : 'HC-' + Math.random().toString(36).substring(2, 8).toUpperCase();
-    setActivePatientId(newId);
-    return {
-      success: true,
-      data: {
-        access_token: 'google-token-' + newId,
-        patient: { id: newId, name: name || 'Patient User', email, uhid: newUhid },
-      },
-      message: 'Signed in with Google',
-    };
-  },
+  /** Google auth must use configured Supabase OAuth; never trust a client-supplied email. */
+  googleAuth: async () => ({ success: false, error: { code: 'OAUTH_NOT_CONFIGURED', message: 'Google sign-in is not configured yet. Please use email and password.' } }),
 
   /** GET /auth/me */
   getCurrentUser: async (token) => {
@@ -198,14 +82,7 @@ const API = {
 
   /** GET /patients/{id} */
   getPatient: async (id = getActivePatientId()) => {
-    if (isFirebaseActive() && window.FirebaseService) {
-      try {
-        const patient = await window.FirebaseService.getPatient(id);
-        if (patient) return { success: true, data: patient };
-      } catch (e) {
-        console.warn('[Firebase] getPatient fallback:', e);
-      }
-    }
+    
     return apiFetch(`/patients/${id}`);
   },
 
@@ -216,27 +93,13 @@ const API = {
 
   /** GET /patients/{id}/visits */
   getVisits: async (id = getActivePatientId()) => {
-    if (isFirebaseActive() && window.FirebaseService) {
-      try {
-        const visits = await window.FirebaseService.getVisits(id);
-        if (visits && visits.length > 0) return { success: true, data: visits };
-      } catch (e) {
-        console.warn('[Firebase] getVisits fallback:', e);
-      }
-    }
+    
     return apiFetch(`/patients/${id}/visits`);
   },
 
   /** POST /patients/{id}/visits */
   createVisit: async (id = getActivePatientId(), payload = {}) => {
-    if (isFirebaseActive() && window.FirebaseService) {
-      try {
-        const visit = await window.FirebaseService.createVisit(id, payload);
-        return { success: true, data: visit };
-      } catch (e) {
-        console.warn('[Firebase] createVisit fallback:', e);
-      }
-    }
+    
     return apiFetch(`/patients/${id}/visits`, {
       method: 'POST',
       body: JSON.stringify(payload),
@@ -245,14 +108,7 @@ const API = {
 
   /** GET /patients/{id}/documents */
   getDocuments: async (id = getActivePatientId(), type = null) => {
-    if (isFirebaseActive() && window.FirebaseService) {
-      try {
-        const docs = await window.FirebaseService.getDocuments(id, type);
-        if (docs && docs.length > 0) return { success: true, data: docs };
-      } catch (e) {
-        console.warn('[Firebase] getDocuments fallback:', e);
-      }
-    }
+    
     return apiFetch(`/patients/${id}/documents${type ? `?document_type=${type}` : ''}`);
   },
 
@@ -278,14 +134,7 @@ const API = {
       }
     }
 
-    if (isFirebaseActive() && window.FirebaseService) {
-      try {
-        const doc = await window.FirebaseService.uploadMedicalDocument(id, payload.file || null, payload);
-        return { success: true, data: doc };
-      } catch (e) {
-        console.warn('[Firebase] uploadDocument fallback:', e);
-      }
-    }
+    
 
     return apiFetch(`/patients/${id}/documents`, {
       method: 'POST',
@@ -304,27 +153,13 @@ const API = {
 
   /** GET /patients/{id}/medications */
   getMedications: async (id = getActivePatientId(), status = null) => {
-    if (isFirebaseActive() && window.FirebaseService) {
-      try {
-        const meds = await window.FirebaseService.getMedications(id, status);
-        if (meds && meds.length > 0) return { success: true, data: meds };
-      } catch (e) {
-        console.warn('[Firebase] getMedications fallback:', e);
-      }
-    }
+    
     return apiFetch(`/patients/${id}/medications${status ? `?status=${status}` : ''}`);
   },
 
   /** GET /patients/{id}/labs */
   getLabs: async (id = getActivePatientId()) => {
-    if (isFirebaseActive() && window.FirebaseService) {
-      try {
-        const labs = await window.FirebaseService.getLabs(id);
-        if (labs && labs.length > 0) return { success: true, data: labs };
-      } catch (e) {
-        console.warn('[Firebase] getLabs fallback:', e);
-      }
-    }
+    
     return apiFetch(`/patients/${id}/labs`);
   },
 
@@ -343,28 +178,14 @@ const API = {
 
   /** GET /patients/{id}/decision-memory */
   getDecisionMemory: async (id = getActivePatientId()) => {
-    if (isFirebaseActive() && window.FirebaseService) {
-      try {
-        const memory = await window.FirebaseService.getDecisionMemory(id);
-        if (memory && memory.length > 0) return { success: true, data: memory };
-      } catch (e) {
-        console.warn('[Firebase] getDecisionMemory fallback:', e);
-      }
-    }
+    
     return apiFetch(`/patients/${id}/decision-memory`);
   },
 
   /** POST /doctor-access/generate */
   generateAccessCode: async (payload = {}) => {
     const curId = getActivePatientId();
-    if (isFirebaseActive() && window.FirebaseService) {
-      try {
-        const grant = await window.FirebaseService.createAccessGrant(curId, payload);
-        return { success: true, data: grant };
-      } catch (e) {
-        console.warn('[Firebase] generateAccessCode fallback:', e);
-      }
-    }
+    
     return apiFetch('/doctor-access/generate', {
       method: 'POST',
       body: JSON.stringify({ patient_id: curId, ...payload }),
@@ -373,14 +194,7 @@ const API = {
 
   /** POST /doctor-access/verify */
   verifyAccessCode: async (code) => {
-    if (isFirebaseActive() && window.FirebaseService) {
-      try {
-        const grant = await window.FirebaseService.verifyAccessCode(code);
-        if (grant) return { success: true, data: grant };
-      } catch (e) {
-        console.warn('[Firebase] verifyAccessCode fallback:', e);
-      }
-    }
+    
     return apiFetch('/doctor-access/verify', {
       method: 'POST',
       body: JSON.stringify({ access_code: code }),
@@ -458,32 +272,14 @@ const API = {
   },
 };
 
-// ─── Backend availability & Firebase connection check ─────────────────────────
+// ─── Backend availability check ──────────────────────────────────────────────
 let backendAvailable = false;
 
 async function checkBackend() {
-  const curId = getActivePatientId();
-  // Check Firebase first
-  if (window.FirebaseConfig && typeof window.FirebaseConfig.initFirebase === 'function') {
-    const fb = await window.FirebaseConfig.initFirebase();
-    if (fb.isConfigured) {
-      backendAvailable = true;
-      console.info('[Backend] Firebase (Cloud Firestore & Storage) connected ✓');
-      if (window.FirebaseService && typeof window.FirebaseService.seedInitialDataIfEmpty === 'function' && window.STATE) {
-        window.FirebaseService.seedInitialDataIfEmpty(curId, window.STATE);
-      }
-      return true;
-    }
-  }
-
-  // Check REST API
   const res = await API.health();
   backendAvailable = res?.success === true;
-  if (backendAvailable) {
-    console.info('[API] Backend REST API connected ✓');
-  } else {
-    console.info('[API] Using local client cache / mock mode');
-  }
+  if (backendAvailable) console.info('[API] Backend REST API connected ✓');
+  else console.warn('[API] Backend is unavailable; authenticated features are disabled.');
   return backendAvailable;
 }
 
@@ -492,4 +288,3 @@ window.API = API;
 window.PATIENT_ID = CURRENT_PATIENT_ID;
 window.checkBackend = checkBackend;
 window.isBackendAvailable = () => backendAvailable;
-window.isFirebaseActive = isFirebaseActive;
