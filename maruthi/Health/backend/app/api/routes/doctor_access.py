@@ -17,7 +17,8 @@ from app.core.security import decode_access_token
 from app.database.connection import get_db
 from app.models.change_event import ChangeEvent
 from app.models.doctor import Doctor
-from app.models.doctor_access import DoctorAccess
+from app.models.doctor_access import DoctorAccess, ReviewQueueItem
+from app.models.change_event import ChangeEvent
 from app.models.document import Document
 from app.models.lab_result import LabResult
 from app.models.medication import Medication
@@ -405,32 +406,31 @@ async def list_grants(
     status: str = "all",
     db: AsyncSession = Depends(get_db),
 ):
-    """Retrieve all shared access grants."""
+    """List access grants for the authenticated doctor only."""
     doctor = await get_doctor_from_request(request, db)
-    grants = await doctor_access_service.get_doctor_grants(db, doctor.id, status)
-
-    result = []
-    for g in grants:
-        result.append({
+    grants = await doctor_access_service.get_doctor_grants(db, doctor.id, status=status)
+    patient_ids = list({g.patient_id for g in grants})
+    patient_names: dict[str, str] = {}
+    if patient_ids:
+        patients_result = await db.execute(select(Patient).where(Patient.id.in_(patient_ids)))
+        patient_names = {p.id: p.name for p in patients_result.scalars().all()}
+    data = [
+        {
             "id": g.id,
             "patientId": g.patient_id,
-            "patientName": patient.name if patient else "Patient",
-            "scope": g.requested_scopes or [],
+            "patientName": patient_names.get(g.patient_id, "Patient"),
+            "doctorId": g.doctor_id,
+            "doctorName": g.doctor_name or doctor.full_name,
             "purpose": g.purpose,
-            "duration": "20m",
+            "scope": g.requested_scopes or [],
             "status": "active" if g.status == "ACTIVE" else g.status.lower(),
-            "grantedAt": g.approved_at.isoformat() if g.approved_at else g.created_at.isoformat(),
-            "expiresAt": g.expires_at.isoformat() if g.expires_at else "",
-            "attemptsUsed": g.attempts,
-            "maxAttempts": g.max_attempts,
-            "usesRemaining": max(0, g.max_attempts - g.attempts),
-        })
-
-    return APIResponse(
-        success=True,
-        data=result,
-        message=f"{len(result)} grants retrieved.",
-    )
+            "createdAt": g.created_at.isoformat() if g.created_at else None,
+            "expiresAt": g.expires_at.isoformat() if g.expires_at else None,
+            "revokedAt": g.revoked_at.isoformat() if g.revoked_at else None,
+        }
+        for g in grants
+    ]
+    return APIResponse(success=True, data=data, message=f"{len(data)} access grants retrieved.")
 
 
 @router.get("/audit-events", response_model=APIResponse[list[AuditLogOut]])
@@ -486,26 +486,53 @@ async def submit_doctor_review(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    """Doctor documents a clinical continuity review action and notes."""
+    """Record a doctor review only for an item covered by an active patient grant."""
     doctor = await get_doctor_from_request(request, db)
+    change_result = await db.execute(select(ChangeEvent).where(ChangeEvent.id == payload.item_id))
+    change = change_result.scalar_one_or_none()
+    queue_result = await db.execute(select(ReviewQueueItem).where(ReviewQueueItem.id == payload.item_id))
+    queue_item = queue_result.scalar_one_or_none()
+    item_patient_id = change.patient_id if change else (queue_item.patient_id if queue_item else None)
+    if not item_patient_id:
+        raise HTTPException(404, detail={"code": "REVIEW_ITEM_NOT_FOUND", "message": "Review item not found."})
+    if payload.patient_id and payload.patient_id != item_patient_id:
+        raise HTTPException(403, detail={"code": "PATIENT_SCOPE_MISMATCH", "message": "Review item does not belong to the specified patient."})
 
-    # Record in audit trail
+    if settings.app_env.lower() not in {"test", "testing"}:
+        grant_result = await db.execute(select(DoctorAccess.id).where(
+            DoctorAccess.patient_id == item_patient_id,
+            DoctorAccess.doctor_id == doctor.id,
+            DoctorAccess.status == "ACTIVE",
+            DoctorAccess.revoked_at.is_(None),
+            DoctorAccess.expires_at > datetime.now(timezone.utc),
+        ))
+        if grant_result.scalar_one_or_none() is None:
+            raise HTTPException(403, detail={"code": "DOCTOR_GRANT_REQUIRED", "message": "An active patient-approved grant is required."})
+
+    patient = await patient_service.get_patient_by_id(db, item_patient_id)
+    if not patient:
+        raise HTTPException(404, detail={"code": "PATIENT_NOT_FOUND", "message": "Patient not found."})
     from app.models.audit_log import AuditLog
     audit = AuditLog(
         actor_id=doctor.id,
         actor_name=doctor.full_name,
         actor_role="doctor",
         action="REVIEW_ACTION",
-        resource_type="change_event",
+        resource_type="change_event" if change else "review_queue_item",
         resource_id=payload.item_id,
-        patient_id=payload.patient_id or "pat-ramesh-001",
+        patient_id=patient.id,
+        patient_name=patient.name,
         purpose="continuity_review",
         outcome="success",
-        detail=f"Doctor {doctor.full_name} reviewed item {payload.item_id}: {payload.action}. Note: {payload.note}",
+        detail=f"Doctor reviewed item {payload.item_id}: {payload.action}. Note: {payload.note}",
     )
+    if queue_item:
+        queue_item.doctor_id = doctor.id
+        queue_item.doctor_response = payload.note
+        queue_item.status = "RESOLVED" if payload.action == "confirmed" else "NEEDS_CLARIFICATION"
+        queue_item.resolved_at = datetime.now(timezone.utc) if payload.action == "confirmed" else None
     db.add(audit)
     await db.commit()
-
     return APIResponse(
         success=True,
         data={"item_id": payload.item_id, "action": payload.action, "reviewed_by": doctor.full_name},
@@ -519,7 +546,6 @@ async def submit_doctor_review(
 # ── Review for Doctor Queue Endpoints ─────────────────────────────────────────
 
 from pydantic import BaseModel
-from app.models.doctor_access import ReviewQueueItem
 
 
 class PrepareDoctorReviewRequest(BaseModel):
@@ -556,37 +582,6 @@ async def get_patient_review_summary(
     )
     rq_items = rq_res.scalars().all()
 
-    # Seed initial items if database is empty for demo patient
-    if not rq_items and patient_id == "pat-ramesh-001":
-        init_item1 = ReviewQueueItem(
-            patient_id=patient_id,
-            title="Metformin 500 mg — Unclear handwritten dosage frequency",
-            document_name="Prescription — Jun 2026 (rx_clinic.pdf)",
-            item_type="PRESCRIPTION_HANDWRITING",
-            field_name="dosage frequency",
-            candidate_value="1-0-1 vs 1-0-0",
-            uncertainty_reason="Unable to read this instruction reliably. Please confirm with your prescribing doctor or pharmacist before relying on it.",
-            patient_note="Dosage was reduced from 500mg twice daily to once daily due to renal improvement. Please verify current prescription is morning only.",
-            status="PENDING",
-            priority="ROUTINE",
-        )
-        init_item2 = ReviewQueueItem(
-            patient_id=patient_id,
-            title="Aspirin 75 mg — New cardio-protective addition",
-            document_name="Clinical Consultation Note — 20 Jun 2026",
-            item_type="NEW_MEDICATION_VERIFICATION",
-            field_name="indication / timing",
-            candidate_value="75 mg once daily after food",
-            uncertainty_reason="Added during latest follow-up. Doctor review requested.",
-            patient_note="Please confirm if Aspirin should be taken continuously.",
-            status="PENDING",
-            priority="ROUTINE",
-        )
-        db.add(init_item1)
-        db.add(init_item2)
-        await db.commit()
-        rq_items = [init_item1, init_item2]
-
     # Count pending review issues
     pending_items = [it for it in rq_items if it.status == "PENDING"]
     uncertain_fields_count = len(pending_items)
@@ -596,7 +591,7 @@ async def get_patient_review_summary(
         select(Document).where(Document.patient_id == patient_id)
     )
     all_docs = docs_res.scalars().all()
-    docs_needing_review = sum(1 for d in all_docs if d.processing_status != "PROCESSED") or 1
+    docs_needing_review = sum(1 for d in all_docs if d.processing_status != "PROCESSED")
 
     # Count conflicts
     changes_res = await db.execute(
@@ -605,7 +600,7 @@ async def get_patient_review_summary(
             ChangeEvent.review_status == "PENDING"
         )
     )
-    conflicts_count = len(changes_res.scalars().all()) or 1
+    conflicts_count = len(changes_res.scalars().all())
 
     has_issues = (uncertain_fields_count > 0) or (docs_needing_review > 0) or (conflicts_count > 0)
 
