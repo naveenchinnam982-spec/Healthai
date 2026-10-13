@@ -486,248 +486,247 @@ def handle_historical_comparison(records: dict[str, Any], query: str, language: 
 
 
 def handle_missing_and_conflicts(records: dict[str, Any], query: str, language: str) -> dict[str, Any]:
-    """
-    Scenario E & F: Identify missing, uncertain, or conflicting records.
-    """
+    """Identify only missing records or conflicts supported by stored patient data."""
     documents: list[Document] = records.get("documents", [])
     changes: list[ChangeEvent] = records.get("changes", [])
     visits: list[Visit] = records.get("visits", [])
+    labs: list[LabResult] = records.get("labs", [])
     q_low = query.lower()
 
-    # Specific check for Scenario E: asking for January report or specific missing month
-    if "january" in q_low or "jan" in q_low:
-        has_jan = any("january" in (d.extracted_text or "").lower() or "01" in (d.file_name or "") for d in documents)
-        if not has_jan:
+    month_aliases = {
+        1: ("january", "jan"), 2: ("february", "feb"), 3: ("march", "mar"),
+        4: ("april", "apr"), 5: ("may",), 6: ("june", "jun"),
+        7: ("july", "jul"), 8: ("august", "aug"), 9: ("september", "sep", "sept"),
+        10: ("october", "oct"), 11: ("november", "nov"), 12: ("december", "dec"),
+    }
+    requested_month = next((m for m, aliases in month_aliases.items() if any(re.search(r"\b" + re.escape(a) + r"\b", q_low) for a in aliases)), None)
+    if requested_month:
+        matching = []
+        for doc in documents:
+            date_value = doc.uploaded_at.strftime("%Y-%m-%d") if getattr(doc, "uploaded_at", None) else ""
+            file_and_text = f"{doc.file_name or ''} {doc.extracted_text or ''}".lower()
+            month_number = f"-{requested_month:02d}-"
+            if any(re.search(r"\b" + re.escape(a) + r"\b", file_and_text) for a in month_aliases[requested_month]) or month_number in date_value:
+                matching.append(doc)
+        for lab in labs:
+            date_value = str(lab.test_date or "")
+            if f"-{requested_month:02d}-" in date_value or any(re.search(r"\b" + re.escape(a) + r"\b", date_value.lower()) for a in month_aliases[requested_month]):
+                matching.append(lab)
+        for visit in visits:
+            date_value = str(visit.visit_date or "")
+            if f"-{requested_month:02d}-" in date_value or any(re.search(r"\b" + re.escape(a) + r"\b", date_value.lower()) for a in month_aliases[requested_month]):
+                matching.append(visit)
+        if not matching:
             if language == "te":
-                answer = (
-                    "నేను మీ అందుబాటులో ఉన్న రికార్డులను శోధించాను, కానీ జనవరి నివేదిక ఏదీ కనుగొనబడలేదు. "
-                    "మీ రికార్డులలో ప్రస్తుతం జూన్ 2026 నాటి కన్సల్టేషన్ నోట్, ప్రిస్క్రిప్షన్ మరియు ల్యాబ్ నివేదికలు మాత్రమే ఉన్నాయి."
-                )
+                answer = f"మీ అందుబాటులో ఉన్న రికార్డుల్లో {month_aliases[requested_month][0].title()} నెలకు సంబంధించిన పత్రం లేదా పరీక్ష ఫలితం కనుగొనబడలేదు. అవసరమైతే ఆ నెల రిపోర్ట్‌ను అప్‌లోడ్ చేయండి."
             else:
-                answer = (
-                    "I searched your accessible medical records and could not find any report from January. "
-                    "Your uploaded records currently contain consultation notes, prescriptions, and lab panels from June 2026."
-                )
+                answer = f"I could not find a document, lab result, or visit dated in {month_aliases[requested_month][0].title()} in your currently accessible records. Upload it if you have a copy."
             return {
-                "answer": answer,
-                "intent": INTENT_INSUFFICIENT_EVIDENCE,
-                "safety_status": "INSUFFICIENT_EVIDENCE",
-                "citations": [],
-                "uncertainty_notes": "January report not found in patient's authorized documents.",
-                "suggested_next_actions": ["Upload the January report if you have the physical paper copy or PDF."],
+                "answer": answer, "intent": INTENT_INSUFFICIENT_EVIDENCE,
+                "safety_status": "INSUFFICIENT_EVIDENCE", "citations": [],
+                "uncertainty_notes": "No matching dated record was found for the requested month.",
+                "suggested_next_actions": ["Upload the missing record if you have it."],
                 "provider": "grounded_records_engine",
-                "provider_note": "Factual absence check: report not present in database.",
+                "provider_note": "Month lookup used only the current patient's stored record metadata.",
                 "documented_facts": [],
             }
 
-    # General missing or conflict items
     missing_items = []
     citations = []
-
-    # Check for unlinked MRI reference
+    has_scan = any((d.document_type or "").upper() in {"SCAN", "MRI", "IMAGING"} for d in documents)
     for doc in documents:
         txt = (doc.extracted_text or "").lower()
-        if "mri" in txt and not any(d.document_type == "SCAN" for d in documents):
-            missing_items.append("• MRI scan of lumbar spine: Referenced in clinical consultation note (20 June 2026), but the scan report file is not uploaded.")
+        if "mri" in txt and not has_scan:
+            date_value = doc.uploaded_at.strftime("%Y-%m-%d") if getattr(doc, "uploaded_at", None) else "Date not recorded"
+            missing_items.append(f"An uploaded document references an MRI, but no scan/imaging document is linked in the current records (source: {doc.file_name or 'uploaded document'}).")
             citations.append(build_citation(
-                title=f"Clinical Consultation Note — {doc.file_name or 'Jun 2026'}",
-                date="20 June 2026",
-                doc_type="CLINICAL_NOTE",
+                title=doc.file_name or "Uploaded clinical document",
+                date=date_value,
+                doc_type=doc.document_type or "DOCUMENT",
                 doc_id=doc.id,
                 uncertainty=True,
             ))
 
-    # Check for unreviewed changes
-    for c in changes:
-        if c.reason_status == "UNEXPLAINED" or c.evidence_status == "INDIRECT":
-            missing_items.append(f"• Unverified change: {c.field_name} changed from '{c.previous_value}' to '{c.current_value}' without direct clinical rationale.")
+    for change in changes:
+        if change.reason_status == "UNEXPLAINED" or change.evidence_status == "INDIRECT":
+            missing_items.append(f"Unverified change: {change.field_name or 'clinical field'} changed from '{change.previous_value or 'not recorded'}' to '{change.current_value or 'not recorded'}' without a direct rationale in the record.")
             citations.append(build_citation(
-                title=f"Unresolved Change — {c.field_name}",
-                date="Documented",
+                title=f"Clinical change: {change.field_name or 'field'}",
+                date=change.created_at.isoformat() if getattr(change, "created_at", None) else "Date not recorded",
                 doc_type="CHANGE_RECORD",
                 doc_id=None,
                 uncertainty=True,
             ))
 
-    # Scenario F: Date discrepancies
     date_conflicts = []
-    if len(visits) >= 2 and visits[0].visit_date == visits[1].visit_date and visits[0].hospital_name != visits[1].hospital_name:
-        date_conflicts.append(f"• Potential date conflict: Multiple visits recorded on {visits[0].visit_date} across {visits[0].hospital_name} and {visits[1].hospital_name}.")
+    dated_visits = sorted([v for v in visits if v.visit_date], key=lambda v: v.visit_date or "")
+    for index, first in enumerate(dated_visits):
+        for second in dated_visits[index + 1:]:
+            if first.visit_date == second.visit_date and first.hospital_name and second.hospital_name and first.hospital_name != second.hospital_name:
+                date_conflicts.append(f"Potential date conflict: visits are recorded on {first.visit_date} at both {first.hospital_name} and {second.hospital_name}.")
+                break
+        if date_conflicts:
+            break
 
     all_notes = missing_items + date_conflicts
     if not all_notes:
-        if language == "te":
-            answer = "మీ రికార్డులలో ప్రస్తుతం ఎటువంటి తప్పిపోయిన డాక్యుమెంట్లు లేదా తేదీల వివాదాలు గుర్తించబడలేదు. అందుబాటులో ఉన్న అన్ని రికార్డులు సమలేఖనం చేయబడ్డాయి."
-        else:
-            answer = "No missing documents or conflicting dates were identified in your current records. All uploaded files and documented visits are consistent."
+        answer = (
+            "మీ ప్రస్తుతం ఉన్న రికార్డుల ఆటోమేటిక్ తనిఖీలో తప్పిపోయిన పత్రం లేదా తేదీ విరుద్ధత గుర్తించబడలేదు. ఇది అన్ని రికార్డులు పూర్తిగా ఉన్నాయని నిర్ధారించదు."
+            if language == "te"
+            else "Automated checks did not identify a missing document reference or conflicting visit date in the records currently available. This does not prove the record set is complete."
+        )
     else:
-        items_str = "\n".join(all_notes)
-        if language == "te":
-            answer = (
-                f"⚠️ మీ రికార్డులలో గుర్తించబడిన తప్పిపోయిన / అసంపూర్తి అంశాలు:\n\n{items_str}\n\n"
-                "దయచేసి ఈ అంశాలను సరిచూసుకోవడానికి సంబంధిత నివేదికలను అప్‌లోడ్ చేయండి లేదా మీ వైద్యుడిని సంప్రదించండి."
-            )
-        else:
-            answer = (
-                f"⚠️ Missing or Unresolved Items in Your Health Continuum:\n\n{items_str}\n\n"
-                "To resolve these discrepancies, please upload the missing document copies or review with your clinician."
-            )
+        items_text = "\n".join(f"• {item}" for item in all_notes)
+        answer = (
+            f"మీ రికార్డుల్లో సమీక్ష అవసరమైన అంశాలు:\n\n{items_text}\n\nవివరాలను మీ వైద్యుడితో నిర్ధారించండి."
+            if language == "te"
+            else f"Items that may need review in your records:\n\n{items_text}\n\nPlease confirm clinical details with your healthcare professional."
+        )
 
     return {
         "answer": answer,
         "intent": INTENT_MISSING_CONFLICTING_DATA,
-        "safety_status": "SAFE",
+        "safety_status": "SAFE" if all_notes else "INSUFFICIENT_EVIDENCE",
         "citations": citations,
-        "uncertainty_notes": "Missing records and discrepancy flags extracted from patient's clinical audit trail.",
-        "suggested_next_actions": ["Upload referenced missing reports to complete your continuum."],
+        "uncertainty_notes": "Findings are limited to the documents, visits, and change events currently stored for this patient.",
+        "suggested_next_actions": ["Upload a referenced missing document or discuss unresolved changes with your clinician."] if all_notes else [],
         "provider": "grounded_records_engine",
-        "provider_note": "Discrepancy and missing record validation engine.",
+        "provider_note": "Missing-record and conflict checks use the current patient's saved records only.",
         "documented_facts": all_notes,
     }
 
 
+
 def handle_visit_query(records: dict[str, Any], query: str, language: str) -> dict[str, Any]:
-    """
-    Scenario B: Recall latest or specific documented hospital visit.
-    """
+    """Summarize the latest stored visit without adding undocumented clinical facts."""
     visits: list[Visit] = records.get("visits", [])
     if not visits:
-        if language == "te":
-            answer = "మీ రికార్డులలో నమోదు చేయబడిన ఆసుపత్రి సందర్శనలు ఏవీ కనుగొనబడలేదు."
-        else:
-            answer = "I could not find any documented hospital visits in your available records."
+        answer = (
+            "మీ రికార్డుల్లో ఆసుపత్రి సందర్శనలు నమోదు కాలేదు."
+            if language == "te"
+            else "No hospital visits are recorded in your accessible account yet."
+        )
         return {
-            "answer": answer,
-            "intent": INTENT_VISIT_EVENT_QUERY,
-            "safety_status": "INSUFFICIENT_EVIDENCE",
-            "citations": [],
-            "uncertainty_notes": "No visits found in database.",
-            "suggested_next_actions": ["Upload consultation notes or discharge summaries."],
-            "provider": "grounded_records_engine",
-            "provider_note": "Visits query: no records found.",
+            "answer": answer, "intent": INTENT_VISIT_EVENT_QUERY,
+            "safety_status": "INSUFFICIENT_EVIDENCE", "citations": [],
+            "uncertainty_notes": "No visits found in the current patient database.",
+            "suggested_next_actions": ["Upload a consultation note or discharge summary if you have one."],
+            "provider": "grounded_records_engine", "provider_note": "No visit records found.",
             "documented_facts": [],
         }
 
-    latest = visits[0]
-    citations = [
-        build_citation(
-            title=f"Clinical Consultation Note — {latest.hospital_name}",
-            date=latest.visit_date,
-            doc_type="CLINICAL_NOTE",
-            doc_id="doc-003",
-        )
-    ]
+    latest = max(visits, key=lambda v: str(v.visit_date or ""))
+    docs: list[Document] = records.get("documents", [])
+    source_doc = next((d for d in docs if d.visit_id == latest.id), None)
+    date_value = latest.visit_date or "Date not recorded"
+    hospital = latest.hospital_name or "Not recorded"
+    clinician = latest.doctor_name or "Not recorded"
+    visit_type = latest.visit_type or "Not recorded"
+    summary = latest.summary or "No clinical summary was stored for this visit."
+    citations = [build_citation(
+        title=(source_doc.file_name if source_doc else f"Visit record — {hospital}"),
+        date=date_value,
+        doc_type=(source_doc.document_type if source_doc else "VISIT_RECORD"),
+        doc_id=(source_doc.id if source_doc else None),
+    )]
 
     if language == "te":
         answer = (
-            f"🏥 మీ చివరి నమోదు చేయబడిన ఆసుపత్రి సందర్శన వివరాలు:\n\n"
-            f"• తేదీ: {latest.visit_date or 'తేదీ నమోదు కాలేదు'}\n"
-            f"• ఆసుపత్రి: {latest.hospital_name}\n"
-            f"• డాక్టర్: {latest.doctor_name}\n"
-            f"• సందర్శన రకం: {latest.visit_type or 'కన్సల్టేషన్'}\n"
-            f"• సారాంశం: {latest.summary or 'సాధారణ తనిఖీ'}\n\n"
-            f"డాక్యుమెంట్ చేయబడిన గమనికలు HbA1c (6.5%) మరియు మెరుగైన మూత్రపిండాల పనితీరు (eGFR 82 mL/min) తో మెరుగుపడిన గ్లైసెమిక్ నియంత్రణను నమోదు చేశాయి."
+            f"మీ తాజా నమోదు చేసిన సందర్శన వివరాలు:\n\n"
+            f"• తేదీ: {date_value}\n• ఆసుపత్రి: {hospital}\n• వైద్యుడు: {clinician}\n"
+            f"• సందర్శన రకం: {visit_type}\n• నమోదు చేసిన సారాంశం: {summary}\n\n"
+            "ఈ వివరాలు మీ ఖాతాలో ఉన్న రికార్డు ఆధారంగా మాత్రమే ఇవ్వబడ్డాయి."
         )
     else:
         answer = (
-            f"🏥 Documented Hospital Visit Details:\n\n"
-            f"• Date: {latest.visit_date or 'Uncertain date'}\n"
-            f"• Hospital: {latest.hospital_name}\n"
-            f"• Physician: {latest.doctor_name}\n"
-            f"• Visit Type: {latest.visit_type or 'Follow-up consultation'}\n"
-            f"• Clinical Summary: {latest.summary or 'Routine review'}\n\n"
-            f"The consultation note documented improved glycaemic control (HbA1c 6.5%) and stabilized kidney filtration (eGFR 82 mL/min)."
+            f"Latest recorded visit:\n\n• Date: {date_value}\n• Hospital: {hospital}\n"
+            f"• Clinician: {clinician}\n• Visit type: {visit_type}\n• Recorded summary: {summary}\n\n"
+            "This is a summary of the saved record, not an independent diagnosis."
         )
-
     return {
-        "answer": answer,
-        "intent": INTENT_VISIT_EVENT_QUERY,
-        "safety_status": "SAFE",
-        "citations": citations,
-        "uncertainty_notes": None,
-        "suggested_next_actions": ["Review full clinical note in Records tab."],
-        "provider": "grounded_records_engine",
-        "provider_note": "Visit retrieval grounded in verified clinical visit table.",
-        "documented_facts": [f"Visit on {latest.visit_date} at {latest.hospital_name} with {latest.doctor_name}"],
+        "answer": answer, "intent": INTENT_VISIT_EVENT_QUERY, "safety_status": "SAFE",
+        "citations": citations, "uncertainty_notes": None,
+        "suggested_next_actions": ["Review the linked visit document or discuss it with your clinician."] if source_doc else [],
+        "provider": "grounded_records_engine", "provider_note": "Visit fields are taken from the stored patient visit.",
+        "documented_facts": [f"Visit on {date_value} at {hospital}"],
     }
+
 
 
 def handle_medication_query(records: dict[str, Any], query: str, language: str) -> dict[str, Any]:
-    """
-    Scenario D context / Prescription information query.
-    """
+    """Answer medication questions from active medication rows only."""
     medications: list[Medication] = records.get("medications", [])
-    current_meds = [m for m in medications if m.status == "CURRENT"]
+    current_meds = [m for m in medications if (m.status or "").upper() == "CURRENT"]
     q_low = query.lower()
-
-    if not current_meds:
-        if language == "te":
-            answer = "మీ రికార్డులలో ప్రస్తుతం చురుకైన మందులు ఏవీ నమోదు కాలేదు."
-        else:
-            answer = "There are no active medications recorded in your current prescription records."
+    named_meds = [m for m in current_meds if m.name and m.name.lower() in q_low]
+    if "aspirin" in q_low:
+        named_meds = [m for m in current_meds if "aspirin" in (m.name or "").lower()]
+        if not named_meds:
+            answer = (
+                "మీ ప్రస్తుత మందుల రికార్డుల్లో Aspirin నమోదు కాలేదు. మీకు వేరే ప్రిస్క్రిప్షన్ ఉంటే అప్‌లోడ్ చేయండి లేదా మీ వైద్యుడిని అడగండి."
+                if language == "te"
+                else "I could not find an active Aspirin entry in your saved medication records. Upload the relevant prescription or confirm with your clinician."
+            )
+            return {
+                "answer": answer, "intent": INTENT_MEDICATION_PRESCRIPTION_QUERY,
+                "safety_status": "INSUFFICIENT_EVIDENCE", "citations": [],
+                "uncertainty_notes": "No active Aspirin record was found for this patient.",
+                "suggested_next_actions": ["Check your current prescription with your clinician."],
+                "provider": "grounded_records_engine", "provider_note": "Medication not found in active patient records.",
+                "documented_facts": [],
+            }
+    selected = named_meds or current_meds
+    if not selected:
+        answer = (
+            "మీ రికార్డుల్లో ప్రస్తుతం చురుకైన మందులు నమోదు కాలేదు."
+            if language == "te"
+            else "There are no active medications recorded in your current prescription records."
+        )
         return {
-            "answer": answer,
-            "intent": INTENT_MEDICATION_PRESCRIPTION_QUERY,
-            "safety_status": "SAFE",
-            "citations": [],
+            "answer": answer, "intent": INTENT_MEDICATION_PRESCRIPTION_QUERY,
+            "safety_status": "INSUFFICIENT_EVIDENCE", "citations": [],
             "uncertainty_notes": "No active medication entries found.",
-            "suggested_next_actions": ["Upload your latest prescription."],
-            "provider": "grounded_records_engine",
-            "provider_note": "No active meds found in DB.",
+            "suggested_next_actions": ["Upload your latest prescription if you have one."],
+            "provider": "grounded_records_engine", "provider_note": "No active medication rows found.",
             "documented_facts": [],
         }
 
-    citations = [
-        build_citation(
-            title="Prescription Record — 20 June 2026",
-            date="20 June 2026",
-            doc_type="PRESCRIPTION",
-            doc_id="doc-004",
-        )
-    ]
+    docs: list[Document] = records.get("documents", [])
+    docs_by_id = {d.id: d for d in docs}
+    citations = []
+    seen_doc_ids = set()
+    for med in selected:
+        doc = docs_by_id.get(med.source_document_id) if med.source_document_id else None
+        if doc and doc.id not in seen_doc_ids:
+            citations.append(build_citation(
+                title=doc.file_name or "Prescription document",
+                date=doc.uploaded_at.strftime("%Y-%m-%d") if getattr(doc, "uploaded_at", None) else "Date not recorded",
+                doc_type=doc.document_type or "PRESCRIPTION",
+                doc_id=doc.id,
+            ))
+            seen_doc_ids.add(doc.id)
+    if not citations:
+        citations = [build_citation(
+            title="Saved medication record", date="Date not recorded",
+            doc_type="MEDICATION_RECORD", doc_id=None, uncertainty=True,
+        )]
 
-    med_lines = [f"• {m.name} {m.dosage or ''} — {m.frequency or ''} ({getattr(m, 'route', '') or 'Oral'})" for m in current_meds]
+    med_lines = [f"• {m.name} {m.dosage or ''} — {m.frequency or 'frequency not recorded'} ({m.route or 'route not recorded'})" for m in selected]
     med_text = "\n".join(med_lines)
-
-    if "aspirin" in q_low:
-        if language == "te":
-            answer = (
-                "💊 ఆస్పిరిన్ (Aspirin) సమాచారం:\n\n"
-                "మీ 20 జూన్ 2026 ప్రిస్క్రిప్షన్ ప్రకారం, ఆస్పిరిన్ 75 mg రోజుకు ఒకసారి (ఆహారం తర్వాత) కార్డియోవాస్కులర్ రక్షణ కోసం సూచించబడింది. "
-                "గమనిక: ఇది డాక్టర్ ప్రియా శర్మతో సమీక్ష కోసం ఫ్లాగ్ చేయబడింది.\n\n"
-                "ముఖ్య హెచ్చరిక: డాక్టర్ సలహా లేకుండా మోతాదును మార్చవద్దు."
-            )
-        else:
-            answer = (
-                "💊 Documented Aspirin Details:\n\n"
-                "Your prescription dated 20 June 2026 records Aspirin 75 mg once daily (after food), added for cardiovascular protection. "
-                "Clinical Note: This item is flagged for follow-up review with Dr. Priya Sharma.\n\n"
-                "Safety Precaution: Do not change or stop your medication without speaking to your doctor."
-            )
-    else:
-        if language == "te":
-            answer = (
-                f"💊 మీ అందుబాటులో ఉన్న ప్రిస్క్రిప్షన్ ప్రకారం ప్రస్తుత మందులు:\n\n{med_text}\n\n"
-                "ముఖ్య భద్రతా సూచన: ఈ వివరాలు మీ రికార్డులలో నమోదైనవి మాత్రమే. "
-                "ఎలాంటి మోతాదు మార్పులకైనా మీ ప్రిస్క్రిప్షన్ రాసిన వైద్యుడిని లేదా ఫార్మసిస్ట్‌ను సంప్రదించండి."
-            )
-        else:
-            answer = (
-                f"💊 Documented Active Medications:\n\n{med_text}\n\n"
-                "Medical Safety Note: These details reflect your saved prescription records. Never alter, discontinue, or initiate any medicine without direct instruction from your healthcare provider."
-            )
-
+    answer = (
+        f"మీ రికార్డుల్లో ఉన్న మందుల వివరాలు:\n\n{med_text}\n\nమోతాదు మార్చే ముందు మీ ప్రిస్క్రిప్షన్ రాసిన వైద్యుడిని సంప్రదించండి."
+        if language == "te"
+        else f"Medication details recorded in your account:\n\n{med_text}\n\nDo not start, stop, or change a dose without guidance from your prescribing clinician."
+    )
     return {
-        "answer": answer,
-        "intent": INTENT_MEDICATION_PRESCRIPTION_QUERY,
-        "safety_status": "SAFE",
-        "citations": citations,
-        "uncertainty_notes": None,
-        "suggested_next_actions": ["Confirm adherence and refills with prescriber."],
-        "provider": "grounded_records_engine",
-        "provider_note": "Prescription retrieval grounded in active medication records.",
+        "answer": answer, "intent": INTENT_MEDICATION_PRESCRIPTION_QUERY,
+        "safety_status": "SAFE", "citations": citations,
+        "uncertainty_notes": "Medication details reflect active medication rows; missing fields are not inferred.",
+        "suggested_next_actions": ["Confirm the current regimen with your prescriber if any details are unclear."],
+        "provider": "grounded_records_engine", "provider_note": "Medication answer is grounded in active patient medication rows.",
         "documented_facts": med_lines,
     }
+
 
 
 def handle_report_value_query(records: dict[str, Any], query: str, language: str) -> dict[str, Any]:
