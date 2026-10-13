@@ -151,7 +151,7 @@ create policy medical_documents_read_authorized on storage.objects
     bucket_id = 'medical-documents'
     and (
       (storage.foldername(name))[1] = (select auth.uid())::text
-      or private.can_access_patient((storage.foldername(name))[2])
+      or private.can_access_patient((storage.foldername(storage.objects.name))[2])
     )
   );
 drop policy if exists medical_documents_upload_owner on storage.objects;
@@ -161,7 +161,7 @@ create policy medical_documents_upload_owner on storage.objects
     and (storage.foldername(name))[1] = (select auth.uid())::text
     and exists (
       select 1 from public.patients p
-      where p.id::text = (storage.foldername(name))[2]
+      where p.id::text = (storage.foldername(storage.objects.name))[2]
         and p.owner_id = (select auth.uid())
     )
   );
