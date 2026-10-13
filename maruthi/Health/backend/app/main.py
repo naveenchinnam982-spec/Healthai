@@ -55,6 +55,10 @@ async def lifespan(app: FastAPI):
             raise RuntimeError("Production requires DATABASE_URL pointing to Supabase PostgreSQL; SQLite is not allowed.")
         if not settings.supabase_url or not settings.supabase_anon_key:
             raise RuntimeError("Production requires SUPABASE_URL and SUPABASE_ANON_KEY for Supabase Auth verification.")
+        if settings.debug:
+            raise RuntimeError("DEBUG must be false in production.")
+        if not settings.allowed_origins or any(origin == "null" or origin.startswith("http://localhost") or origin.startswith("http://127.0.0.1") for origin in settings.cors_origins):
+            raise RuntimeError("Production ALLOWED_ORIGINS must contain only explicit deployed HTTPS origins.")
         logger.info("Production schema must be managed by versioned SQL migrations; automatic create_all is disabled.")
     else:
         await create_all_tables()
@@ -101,7 +105,7 @@ async def require_supabase_session_and_ownership(request: Request, call_next):
     path = request.url.path
     if request.method == "OPTIONS" or not path.startswith("/api/"):
         return await call_next(request)
-    if path in {"/api/health", "/api/docs", "/api/redoc", "/api/openapi.json"}:
+    if path in {"/api/health", "/api/config", "/api/docs", "/api/redoc", "/api/openapi.json"}:
         return await call_next(request)
     if path in LEGACY_AUTH_PATHS:
         return JSONResponse(
@@ -288,6 +292,21 @@ async def serve_root_assets(file_path: str):
         return FileResponse(patient_asset, headers=NO_CACHE_HEADERS)
     return JSONResponse(status_code=404, content={"message": "Asset not found"})
 
+
+
+@app.get("/api/config", include_in_schema=False)
+async def public_supabase_config():
+    """Return only browser-safe Supabase settings; never expose a service-role key."""
+    if not settings.supabase_url or not settings.supabase_anon_key:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "Supabase public configuration is not set on this backend."},
+            headers={"Cache-Control": "no-store"},
+        )
+    return JSONResponse(
+        content={"supabaseUrl": settings.supabase_url, "supabaseAnonKey": settings.supabase_anon_key},
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 # ── Patient App Landing Page ───────────────────────────────────────────────────
