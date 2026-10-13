@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.core.security import decode_access_token
 from app.database.connection import get_db
 from app.models.change_event import ChangeEvent
@@ -37,40 +38,59 @@ from app.schemas.schemas import (
 from app.services import doctor_access_service, patient_service
 
 router = APIRouter(prefix="/doctor-access", tags=["doctor-access"])
+settings = get_settings()
+
+
+async def _assert_patient_owner(request: Request, db: AsyncSession, patient_id: str) -> Patient:
+    user = getattr(request.state, "supabase_user", None)
+    if settings.app_env.lower() in {"test", "testing"}:
+        patient = await patient_service.get_patient_by_id(db, patient_id)
+        if patient is None:
+            raise HTTPException(status_code=404, detail={"code": "PATIENT_NOT_FOUND", "message": "Patient not found"})
+        return patient
+    if not user:
+        raise HTTPException(status_code=401, detail={"code": "AUTH_REQUIRED", "message": "Sign in to continue."})
+    patient = await patient_service.get_patient_by_id(db, patient_id)
+    if patient is None:
+        raise HTTPException(status_code=404, detail={"code": "PATIENT_NOT_FOUND", "message": "Patient not found"})
+    if str(patient.owner_id or "") != str(user.get("id")):
+        raise HTTPException(status_code=403, detail={"code": "PATIENT_ACCESS_DENIED", "message": "You do not own this patient's records."})
+    return patient
 
 
 async def get_doctor_from_request(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> Doctor:
-    """Extract authenticated doctor from JWT Bearer token or return default verified doctor."""
-    auth_header = request.headers.get("Authorization")
-    if auth_header and auth_header.startswith("Bearer "):
-        token = auth_header[7:].strip()
-        payload = decode_access_token(token)
-        if payload and payload.get("role") == "doctor" and "sub" in payload:
-            stmt = select(Doctor).where(Doctor.id == payload["sub"])
-            res = await db.execute(stmt)
-            doc = res.scalar_one_or_none()
-            if doc and doc.is_active:
-                return doc
-
-    # Default fallback: seeded doctor Dr. Ananya Sharma
-    stmt = select(Doctor).where(Doctor.email == "ananya.sharma@continuumhealth.in")
-    res = await db.execute(stmt)
-    doc = res.scalar_one_or_none()
-    if not doc:
-        # Create or fetch any active doctor
-        stmt2 = select(Doctor).limit(1)
-        res2 = await db.execute(stmt2)
-        doc = res2.scalar_one_or_none()
-
-    if not doc:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"code": "DOCTOR_AUTH_REQUIRED", "message": "Doctor authentication required."},
+    """Resolve an active doctor from verified Supabase identity; no default doctor fallback."""
+    user = getattr(request.state, "supabase_user", None)
+    if user and user.get("id"):
+        result = await db.execute(
+            select(Doctor).where(Doctor.user_id == str(user["id"]), Doctor.is_active.is_(True))
         )
-    return doc
+        doctor = result.scalar_one_or_none()
+        if doctor:
+            return doctor
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "DOCTOR_PROFILE_REQUIRED", "message": "No active doctor profile is linked to this Supabase account."},
+        )
+
+    # Legacy JWT is accepted only in isolated tests, never in a deployed environment.
+    if settings.app_env.lower() in {"test", "testing"}:
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            payload = decode_access_token(auth_header[7:].strip())
+            if payload and payload.get("role") == "doctor" and payload.get("sub"):
+                result = await db.execute(select(Doctor).where(Doctor.id == payload["sub"], Doctor.is_active.is_(True)))
+                doctor = result.scalar_one_or_none()
+                if doctor:
+                    return doctor
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail={"code": "DOCTOR_AUTH_REQUIRED", "message": "Doctor authentication required."},
+        headers={"WWW-Authenticate": "Bearer"},
+    )
 
 
 @router.post(
@@ -80,14 +100,11 @@ async def get_doctor_from_request(
 )
 async def generate_access_code(
     payload: GenerateAccessCodeRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ):
     """Patient generates a random 20-minute demonstration PIN."""
-    patient = await patient_service.get_patient_by_id(db, payload.patient_id)
-    if not patient:
-        raise HTTPException(
-            status_code=404, detail={"code": "PATIENT_NOT_FOUND", "message": "Patient not found"}
-        )
+    patient = await _assert_patient_owner(request, db, payload.patient_id)
 
     access = await doctor_access_service.generate_access(
         db,
@@ -206,6 +223,7 @@ async def revoke_access(
     db: AsyncSession = Depends(get_db),
 ):
     """Patient or doctor revokes an access grant."""
+    await _assert_patient_owner(request, db, payload.patient_id)
     revoked = await doctor_access_service.revoke_access(
         db, payload.access_id, payload.patient_id, revoked_by="Patient"
     )
@@ -610,6 +628,7 @@ async def get_patient_review_summary(
 @router.post("/review-queue", response_model=APIResponse[dict[str, Any]])
 async def submit_patient_review_package(
     payload: PrepareDoctorReviewRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -617,9 +636,7 @@ async def submit_patient_review_package(
     Automatically generates an authoritative 20-minute demonstration PIN and
     queues the package for clinical review.
     """
-    patient = await patient_service.get_patient_by_id(db, payload.patient_id)
-    if not patient:
-        raise HTTPException(status_code=404, detail={"code": "PATIENT_NOT_FOUND", "message": "Patient not found"})
+    patient = await _assert_patient_owner(request, db, payload.patient_id)
 
     # 1. Provision 20-minute temporary access code
     access = await doctor_access_service.generate_access(
