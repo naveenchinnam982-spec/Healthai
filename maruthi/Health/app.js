@@ -3663,199 +3663,71 @@ async function executeUploadPipeline(fileOrName) {
 // Feature 3: Smart Verification & Missing Information Detection Confirmation
 async function confirmAndSaveRecord(saveUnresolved = false) {
   const flow = STATE.addRecordFlow;
-  const docId = flow.uploadedDocId || ('doc-' + Date.now());
-  const fileName = flow.uploadedFileName || 'medical_report.pdf';
-  const docType = flow.selectedType || 'DOCUMENT';
+  if (window.DEMO_PREVIEW || STATE.demoPreview) {
+    alert("Demo preview is read-only. Sign in to save medical records.");
+    return;
+  }
+  if (!STATE.patient?.id || !flow.uploadedDocId) {
+    alert("No successfully uploaded document was found. Upload a real file first; nothing has been saved.");
+    return;
+  }
 
-  const titleInp = document.getElementById('verify-title-input');
-  const dateInp = document.getElementById('verify-date-input');
-  const hospInp = document.getElementById('verify-hosp-input');
-  const patInp = document.getElementById('verify-patient-input');
-
-  const verifiedTitle = (titleInp && titleInp.value.trim()) || 'Medical Record';
-  const verifiedDate = (dateInp && dateInp.value.trim()) || new Date().toISOString().split('T')[0];
-  const verifiedHosp = (hospInp && hospInp.value.trim()) || 'Clinical Center';
-  const verifiedPatient = (patInp && patInp.value.trim()) || (STATE.patient && STATE.patient.name) || 'Patient';
-
-  // Gather lab results if lab report
+  const readValue = id => document.getElementById(id)?.value?.trim() || "";
   const gatheredLabs = [];
-  document.querySelectorAll('.lab-result-val').forEach(inp => {
-    const idx = inp.getAttribute('data-idx');
-    const nameEl = document.querySelector(`.lab-name-val[data-idx="${idx}"]`);
-    const unitEl = document.querySelector(`.lab-unit-val[data-idx="${idx}"]`);
-    const rangeEl = document.querySelector(`.lab-range-val[data-idx="${idx}"]`);
-    if (nameEl && nameEl.value.trim()) {
-      gatheredLabs.push({
-        test_name: nameEl.value.trim(),
-        result: inp.value.trim(),
-        unit: (unitEl && unitEl.value.trim()) || '',
-        reference_range: (rangeEl && rangeEl.value.trim()) || '',
-      });
-    }
+  document.querySelectorAll(".lab-result-val").forEach(input => {
+    const idx = input.getAttribute("data-idx");
+    const name = document.querySelector(`.lab-name-val[data-idx="${idx}"]`)?.value?.trim();
+    const unit = document.querySelector(`.lab-unit-val[data-idx="${idx}"]`)?.value?.trim() || "";
+    const range = document.querySelector(`.lab-range-val[data-idx="${idx}"]`)?.value?.trim() || "";
+    if (name) gatheredLabs.push({ test_name: name, result: input.value.trim(), unit, reference_range: range });
   });
-
-  const manualLab = document.getElementById('verify-lab-manual');
-  if (manualLab && manualLab.value.trim()) {
-    const parts = manualLab.value.split(':');
-    gatheredLabs.push({
-      test_name: parts[0].trim(),
-      result: (parts[1] || '').trim(),
-      unit: '',
-      reference_range: '',
-    });
+  const manualLab = readValue("verify-lab-manual");
+  if (manualLab) {
+    const parts = manualLab.split(":");
+    gatheredLabs.push({ test_name: parts[0].trim(), result: (parts[1] || "").trim(), unit: "", reference_range: "" });
   }
 
-  // Gather medications if prescription
   const gatheredMeds = [];
-  document.querySelectorAll('.med-dose-val').forEach(inp => {
-    const idx = inp.getAttribute('data-idx');
-    const nameEl = document.querySelector(`.med-name-val[data-idx="${idx}"]`);
-    const freqEl = document.querySelector(`.med-freq-val[data-idx="${idx}"]`);
-    const routeEl = document.querySelector(`.med-route-val[data-idx="${idx}"]`);
-    if (nameEl && nameEl.value.trim()) {
-      gatheredMeds.push({
-        name: nameEl.value.trim(),
-        dosage: inp.value.trim(),
-        frequency: (freqEl && freqEl.value.trim()) || '',
-        route: (routeEl && routeEl.value.trim()) || 'Oral',
-        status: 'CURRENT',
-      });
-    }
+  document.querySelectorAll(".med-dose-val").forEach(input => {
+    const idx = input.getAttribute("data-idx");
+    const name = document.querySelector(`.med-name-val[data-idx="${idx}"]`)?.value?.trim();
+    const frequency = document.querySelector(`.med-freq-val[data-idx="${idx}"]`)?.value?.trim() || "";
+    const route = document.querySelector(`.med-route-val[data-idx="${idx}"]`)?.value?.trim() || "";
+    if (name) gatheredMeds.push({ name, dosage: input.value.trim(), frequency, route, status: "CURRENT" });
   });
+  const manualMed = readValue("verify-manual-med");
+  if (manualMed) gatheredMeds.push({ name: manualMed, dosage: "", frequency: readValue("verify-manual-freq"), route: "", status: "CURRENT" });
 
-  const manualMed = document.getElementById('verify-manual-med');
-  const manualFreq = document.getElementById('verify-manual-freq');
-  if (manualMed && manualMed.value.trim()) {
-    gatheredMeds.push({
-      name: manualMed.value.trim(),
-      dosage: '',
-      frequency: (manualFreq && manualFreq.value.trim()) || '',
-      route: 'Oral',
-      status: 'CURRENT',
-    });
-  }
-
-  // Gather diagnoses and notes
-  const diagInp = document.getElementById('verify-diagnoses-input');
-  const notesInp = document.getElementById('verify-notes-input');
-  const diagnoses = diagInp && diagInp.value ? diagInp.value.split(',').map(s => s.trim()).filter(Boolean) : [];
-  const clinicalNotes = notesInp ? notesInp.value.trim() : '';
-
-  // Gather receipts
-  const invInp = document.getElementById('verify-invoice-input');
-  const totInp = document.getElementById('verify-total-input');
-  const totalAmount = totInp ? totInp.value.trim() : '';
-
-  const reviewStatus = saveUnresolved ? 'SAVED_WITH_UNRESOLVED' : 'VERIFIED';
-
-  // Real backend call to persist review & promote entities to DB
-  try {
-    if (window.API && typeof window.API.reviewDocument === 'function' && flow.uploadedDocId) {
-      await window.API.reviewDocument(flow.uploadedDocId, {
-        status: reviewStatus,
-        document_type: docType,
-        document_title: verifiedTitle,
-        document_date: verifiedDate,
-        hospital_name: verifiedHosp,
-        patient_name: verifiedPatient,
-        medications: gatheredMeds,
-        lab_results: gatheredLabs,
-        diagnoses: diagnoses,
-        clinical_notes: clinicalNotes,
-        total_amount: totalAmount,
-        save_unresolved: saveUnresolved,
-      });
-    }
-  } catch (err) {
-    console.warn('[Review] Backend review call failed:', err);
-  }
-
-  // Construct confirmed document object
-  const newDoc = {
-    id: docId,
-    name: verifiedTitle,
-    type: docType,
-    file: fileName,
-    date: verifiedDate,
-    status: reviewStatus,
+  const payload = {
+    status: saveUnresolved ? "SAVED_WITH_UNRESOLVED" : "VERIFIED",
+    document_type: flow.selectedType || "DOCUMENT",
+    document_title: readValue("verify-title-input") || flow.uploadedFileName || "Medical record",
+    document_date: readValue("verify-date-input") || null,
+    hospital_name: readValue("verify-hosp-input") || null,
+    patient_name: readValue("verify-patient-input") || STATE.patient.name,
     medications: gatheredMeds,
-    labs: gatheredLabs,
+    lab_results: gatheredLabs,
+    diagnoses: readValue("verify-diagnoses-input").split(",").map(s => s.trim()).filter(Boolean),
+    clinical_notes: readValue("verify-notes-input"),
+    total_amount: readValue("verify-total-input"),
+    save_unresolved: saveUnresolved,
   };
 
-  // Add/Update Hospital in STATE
-  if (!STATE.hospitals || STATE.hospitals.length === 0) {
-    STATE.hospitals = [{
-      id: 'hosp-' + Date.now(),
-      name: verifiedHosp,
-      shortName: verifiedHosp.split(',')[0],
-      visitCount: 1,
-      recordCount: 1,
-      doctor: 'Attending Physician',
-    }];
-  } else {
-    STATE.hospitals[0].recordCount = (STATE.hospitals[0].recordCount || 0) + 1;
+  const result = await window.API.reviewDocument(flow.uploadedDocId, payload);
+  if (!result?.success) {
+    alert(result?.error?.message || "The server could not save the review. Your record has not been marked as saved.");
+    return;
   }
 
-  // Add/Update Visit in STATE
-  const localVisitMeds = gatheredMeds.map(m => ({
-    name: m.name,
-    dose: m.dosage || '',
-    freq: m.frequency || '',
-    status: 'CURRENT'
-  }));
-  const localVisitLabs = gatheredLabs.map(l => ({
-    test: l.test_name,
-    value: l.result || '',
-    unit: l.unit || '',
-    range: l.reference_range || '',
-    status: 'optimal'
-  }));
-
-  if (!STATE.visits || STATE.visits.length === 0) {
-    STATE.visits = [{
-      id: 'visit-' + Date.now(),
-      date: verifiedDate,
-      dateRaw: verifiedDate,
-      hospitalName: verifiedHosp,
-      doctorName: 'Attending Physician',
-      type: docType === 'PRESCRIPTION' ? 'Prescription Review' : 'Consultation Record',
-      summary: `Verified record: ${verifiedTitle}`,
-      medications: localVisitMeds,
-      labs: localVisitLabs,
-      documents: [newDoc],
-    }];
-  } else {
-    STATE.visits[0].documents.unshift(newDoc);
-    if (localVisitMeds.length > 0) {
-      STATE.visits[0].medications = [...localVisitMeds, ...(STATE.visits[0].medications || [])];
-    }
-    if (localVisitLabs.length > 0) {
-      STATE.visits[0].labs = [...localVisitLabs, ...(STATE.visits[0].labs || [])];
-    }
-  }
-
-  // Persist to localStorage
-  if (STATE.patient?.id) {
-    try {
-      localStorage.setItem('hc_records_' + STATE.patient.id, JSON.stringify({
-        visits: STATE.visits,
-        hospitals: STATE.hospitals,
-        changes: STATE.changes,
-      }));
-    } catch (e) {}
-  }
-
+  await syncWithBackend();
   closeAddRecordFlow();
-
-  const toast = document.createElement('div');
-  toast.style.cssText = 'position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:#064e3b;color:white;padding:10px 18px;border-radius:99px;font-size:13px;font-weight:600;box-shadow:0 8px 24px rgba(0,0,0,0.2);z-index:99999;display:flex;align-items:center;gap:8px;';
-  toast.innerHTML = `<span>✓</span> Medical record verified & saved (${reviewStatus})`;
+  const toast = document.createElement("div");
+  toast.style.cssText = "position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:#064e3b;color:white;padding:10px 18px;border-radius:99px;font-size:13px;font-weight:600;box-shadow:0 8px 24px rgba(0,0,0,0.2);z-index:99999;";
+  toast.textContent = "Medical record review saved to your account.";
   document.body.appendChild(toast);
   setTimeout(() => toast.remove(), 2800);
-
-  navigate('records');
+  navigate("records");
 }
-
 
 // ─── SCREEN 5: RECORDS (ORGANIZED BY HOSPITAL & VISIT) ─────────────────────
 function renderRecords() {
