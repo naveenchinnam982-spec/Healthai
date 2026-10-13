@@ -105,7 +105,7 @@ async def redeem_pin(
     """
     clean_code = code.replace("-", "").replace(" ", "").strip()
     result = await db.execute(
-        select(DoctorAccess).where(DoctorAccess.access_code == clean_code)
+        select(DoctorAccess).where(DoctorAccess.code_hash == hash_pin(clean_code))
     )
     access = result.scalar_one_or_none()
 
