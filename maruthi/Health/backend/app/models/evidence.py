@@ -41,8 +41,6 @@ class Evidence(Base):
 
     evidence_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
     # LAB_REPORT | CLINICAL_NOTE | PRESCRIPTION | SCAN | OTHER
-
-    evidence_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
 
