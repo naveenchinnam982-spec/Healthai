@@ -18,7 +18,6 @@ from app.database.connection import get_db
 from app.models.change_event import ChangeEvent
 from app.models.doctor import Doctor
 from app.models.doctor_access import DoctorAccess, ReviewQueueItem
-from app.models.change_event import ChangeEvent
 from app.models.document import Document
 from app.models.lab_result import LabResult
 from app.models.medication import Medication
