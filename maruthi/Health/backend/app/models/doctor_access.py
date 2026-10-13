@@ -26,7 +26,7 @@ class DoctorAccess(Base):
     __tablename__ = "doctor_accesses"
     __table_args__ = (
         Index("ix_doctor_accesses_patient_id", "patient_id"),
-        Index("ix_doctor_accesses_access_code", "access_code"),
+        Index("ix_doctor_accesses_code_hash", "code_hash"),
         Index("ix_doctor_accesses_status", "status"),
     )
 
@@ -48,7 +48,7 @@ class DoctorAccess(Base):
 
     purpose: Mapped[str] = mapped_column(String(100), default="DEMO_PURPOSE_ONLY", nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="PENDING", nullable=False)
-    # PENDING | APPROVED | DECLINED | EXPIRED | REVOKED
+    # ACTIVE | REVOKED | EXPIRED | DECLINED
 
     attempts: Mapped[int] = mapped_column("attempts_used", Integer, default=0, nullable=False)
     max_attempts: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
@@ -57,8 +57,6 @@ class DoctorAccess(Base):
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     revoked_by: Mapped[str | None] = mapped_column(String(200), nullable=True)
-    doctor_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
-    doctor_email: Mapped[str | None] = mapped_column(String(200), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
     # ── Relationships ────────────────────────────────────────────────────────
