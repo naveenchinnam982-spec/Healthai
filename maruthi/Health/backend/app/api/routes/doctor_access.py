@@ -97,9 +97,10 @@ async def generate_access_code(
         scopes=payload.requested_scopes,
     )
 
+    code = getattr(access, "_generated_access_code", "")
     out = GenerateAccessCodeOut(
         id=access.id,
-        access_code=access.access_code,
+        access_code=code,
         expires_at=access.expires_at,
         status=access.status,
         purpose=access.purpose,
@@ -109,7 +110,7 @@ async def generate_access_code(
     return APIResponse(
         success=True,
         data=out,
-        message=f"20-minute demonstration PIN generated: {access.access_code}. Purpose: DEMO PURPOSE ONLY.",
+        message="20-minute temporary access PIN generated. Share it only with the intended clinician.",
     )
 
 
@@ -156,7 +157,7 @@ async def verify_and_redeem_pin(
     if not patient:
         raise HTTPException(status_code=404, detail={"code": "PATIENT_NOT_FOUND", "message": "Associated patient not found."})
 
-    scopes_list = [s.strip() for s in (access.requested_scopes or "").split(",") if s.strip()]
+    scopes_list = access.requested_scopes or []
     if not scopes_list:
         scopes_list = ["laboratory_reports", "prescriptions", "visit_history", "documents"]
 
@@ -179,12 +180,12 @@ async def verify_and_redeem_pin(
         "id": patient.id,
         "appPatientId": patient.uhid or "HC-2024-00847",
         "fullName": patient.name,
-        "age": 42,
-        "sex": (patient.gender or "male").lower(),
-        "lastVisitDate": "2026-06-20",
+        "age": None,
+        "sex": (patient.gender or "not specified").lower(),
+        "lastVisitDate": None,
         "authorizationStatus": "authorized",
-        "abhaId": "91-8472-9014-2201",
-        "abhaLinked": True,
+        "abhaId": None,
+        "abhaLinked": False,
     }
 
     return APIResponse(
@@ -192,7 +193,6 @@ async def verify_and_redeem_pin(
         data={
             "grant": grant_data,
             "patient": patient_summary,
-            "access_code": access.access_code,
             "purpose": "DEMO_PURPOSE_ONLY",
         },
         message="Demonstration PIN verified. Access granted for 20 minutes.",
@@ -279,8 +279,8 @@ async def get_permitted_records(
         "address": "42, 3rd Cross, Indiranagar, Bengaluru 560038",
         "lastVisitDate": "2026-06-20",
         "authorizationStatus": "authorized" if is_authorized else "pending",
-        "abhaId": "91-8472-9014-2201",
-        "abhaLinked": True,
+        "abhaId": None,
+        "abhaLinked": False,
     }
 
     formatted_meds = [
@@ -400,7 +400,7 @@ async def list_grants(
             "scope": ["laboratory_reports", "prescriptions", "visit_history", "documents"],
             "purpose": g.purpose,
             "duration": "20m",
-            "status": "active" if g.status in ("ACTIVE", "APPROVED") else g.status.lower(),
+            "status": "active" if g.status == "ACTIVE" else g.status.lower(),
             "grantedAt": g.approved_at.isoformat() if g.approved_at else g.created_at.isoformat(),
             "expiresAt": g.expires_at.isoformat() if g.expires_at else "",
             "attemptsUsed": g.attempts,
@@ -635,7 +635,7 @@ async def submit_patient_review_package(
         for it in payload.items:
             q_item = ReviewQueueItem(
                 patient_id=payload.patient_id,
-                access_code=access.access_code,
+                access_id=access.id,
                 title=it.get("title") or "Medical Record Review Item",
                 document_id=it.get("document_id"),
                 document_name=it.get("document_name") or "Uploaded Medical Document",
@@ -653,7 +653,7 @@ async def submit_patient_review_package(
         # Default package item
         q_item = ReviewQueueItem(
             patient_id=payload.patient_id,
-            access_code=access.access_code,
+            access_id=access.id,
             title="Patient Clinical Review Request",
             document_name="Patient Health Portfolio",
             item_type="COMPREHENSIVE_REVIEW",
@@ -665,20 +665,21 @@ async def submit_patient_review_package(
         created_items.append(q_item)
 
     await db.commit()
+    generated_code = getattr(access, "_generated_access_code", "")
 
     return APIResponse(
         success=True,
         data={
-            "access_code": access.access_code,
+            "access_code": generated_code,
             "expires_at": access.expires_at.isoformat() if access.expires_at else "",
             "expires_in_seconds": 1200,
             "patient_id": payload.patient_id,
             "patient_name": patient.name,
             "items_count": len(created_items),
             "status": "QUEUED_FOR_DOCTOR",
-            "message": f"Review package prepared successfully. 20-minute PIN is {access.access_code}.",
+            "message": "Review package prepared successfully. Share the temporary PIN only with the intended clinician.",
         },
-        message=f"Review package submitted for doctor review. Access PIN: {access.access_code}",
+        message="Review package submitted for doctor review.",
     )
 
 
@@ -705,7 +706,7 @@ async def list_doctor_review_queue(
         {
             "id": it.id,
             "patient_id": it.patient_id,
-            "access_code": it.access_code,
+            "access_id": it.access_id,
             "title": it.title,
             "document_name": it.document_name,
             "item_type": it.item_type,
