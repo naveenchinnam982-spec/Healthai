@@ -339,60 +339,42 @@ const DEMO_RAMESH_DATA = {
   },
 };
 
-// Global active app state
+// Global active app state. Real patient data is loaded only after Supabase Auth succeeds.
 let STATE = {
-  lang: (typeof localStorage !== 'undefined' && localStorage.getItem('hc_lang')) || 'en',
+  lang: (typeof localStorage !== "undefined" && localStorage.getItem("hc_lang")) || "en",
   backendConnected: false,
-  patient: JSON.parse(JSON.stringify(DEMO_RAMESH_DATA.patient)),
-  hospitals: JSON.parse(JSON.stringify(DEMO_RAMESH_DATA.hospitals)),
-  visits: JSON.parse(JSON.stringify(DEMO_RAMESH_DATA.visits)),
-  changes: JSON.parse(JSON.stringify(DEMO_RAMESH_DATA.changes)),
-  decisionMemory: JSON.parse(JSON.stringify(DEMO_RAMESH_DATA.decisionMemory)),
-  doctorAccess: {
-    code: '842-195',
-    expiresInSeconds: 580,
-    timerId: null,
-    status: 'ACTIVE',
-    pendingRequest: {
-      doctorName: 'Dr. Priya Sharma',
-      hospital: 'City Care Hospital',
-      scope: 'Medical history, medications, and recent lab reports',
-      requestedAt: 'Just now',
-    },
-  },
-  voiceCompanion: {
-    state: 'idle',
-    speechEnabled: true,
-    recognition: null,
-    currentTranscript: '',
-    currentDraft: '',
-    chatHistory: JSON.parse(JSON.stringify(DEMO_RAMESH_DATA.voiceCompanion.chatHistory)),
-    lastSpokenText: '',
-  },
-  addRecordFlow: {
-    step: 1,
-    selectedType: 'PRESCRIPTION',
-    selectedHospital: 'City Care Hospital, Chennai',
-    selectedVisit: 'visit-003',
-    uploadedFileName: '',
-    extractedData: null,
-  },
-  conflicts: JSON.parse(JSON.stringify(DEMO_RAMESH_DATA.conflicts)),
-  selectedComparisonMetric: 'hba1c',
-  historicalMetrics: JSON.parse(JSON.stringify(DEMO_RAMESH_DATA.historicalMetrics)),
+  demoPreview: false,
+  patient: { id: "", name: "", firstName: "Patient", age: null, dob: "", bloodGroup: "Not specified", uhid: "", phone: "", email: "" },
+  hospitals: [],
+  visits: [],
+  changes: [],
+  decisionMemory: null,
+  doctorAccess: { code: null, expiresInSeconds: 0, timerId: null, status: "NONE", pendingRequest: { doctorName: "", hospital: "", scope: "", requestedAt: "" } },
+  voiceCompanion: { state: "idle", speechEnabled: true, recognition: null, currentTranscript: "", currentDraft: "", chatHistory: [], lastSpokenText: "" },
+  addRecordFlow: { step: 1, selectedType: "PRESCRIPTION", selectedHospital: "", selectedVisit: "", uploadedFileName: "", extractedData: null },
+  conflicts: [],
+  selectedComparisonMetric: "hba1c",
+  historicalMetrics: {},
 };
 
 function loadPatientData(patient = {}) {
-  const isRamesh = Boolean(
-    patient && (
-      patient.id === 'pat-ramesh-001' ||
-      patient.uhid === 'HC-2024-00847' ||
-      (patient.email && patient.email.toLowerCase().includes('ramesh')) ||
-      (patient.name && patient.name.toLowerCase().includes('ramesh'))
-    )
-  );
+  if (!patient || !patient.id) {
+    STATE.patient = { id: "", name: "", firstName: "Patient", age: null, dob: "", bloodGroup: "Not specified", uhid: "", phone: "", email: "" };
+    STATE.hospitals = [];
+    STATE.visits = [];
+    STATE.changes = [];
+    STATE.decisionMemory = null;
+    STATE.conflicts = [];
+    STATE.historicalMetrics = {};
+    STATE.voiceCompanion.chatHistory = [];
+    STATE.doctorAccess = { code: null, expiresInSeconds: 0, timerId: null, status: "NONE", pendingRequest: { doctorName: "", hospital: "", scope: "", requestedAt: "" } };
+    STATE.demoPreview = false;
+    if (typeof window !== "undefined") window.PATIENT_ID = "";
+    return;
+  }
 
-  if (isRamesh) {
+  const isPreview = window.DEMO_PREVIEW === true && patient.id === DEMO_RAMESH_DATA.patient.id;
+  if (isPreview) {
     STATE.patient = JSON.parse(JSON.stringify(DEMO_RAMESH_DATA.patient));
     STATE.hospitals = JSON.parse(JSON.stringify(DEMO_RAMESH_DATA.hospitals));
     STATE.visits = JSON.parse(JSON.stringify(DEMO_RAMESH_DATA.visits));
@@ -401,64 +383,45 @@ function loadPatientData(patient = {}) {
     STATE.conflicts = JSON.parse(JSON.stringify(DEMO_RAMESH_DATA.conflicts));
     STATE.historicalMetrics = JSON.parse(JSON.stringify(DEMO_RAMESH_DATA.historicalMetrics));
     STATE.voiceCompanion.chatHistory = JSON.parse(JSON.stringify(DEMO_RAMESH_DATA.voiceCompanion.chatHistory));
+    STATE.doctorAccess = { code: null, expiresInSeconds: 0, timerId: null, status: "PREVIEW", pendingRequest: { doctorName: "", hospital: "", scope: "", requestedAt: "" } };
+    STATE.demoPreview = true;
   } else {
-    const pId = patient?.id || ('pat-' + Math.random().toString(36).substring(2, 9));
-    const pUhid = patient?.uhid || ('HC-' + Math.random().toString(36).substring(2, 8).toUpperCase());
-    const pName = patient?.name || (patient?.email ? patient.email.split('@')[0].replace(/[._]/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) : 'New Patient');
-    const pFirst = pName.split(' ')[0] || 'Patient';
-
+    const name = patient.name || "Patient";
     STATE.patient = {
-      id: pId,
-      name: pName,
-      firstName: pFirst,
-      age: patient?.age || null,
-      dob: patient?.dob || '',
-      bloodGroup: patient?.blood_group || patient?.bloodGroup || 'Not specified',
-      uhid: pUhid,
-      phone: patient?.phone || '',
-      email: patient?.email || '',
+      id: patient.id,
+      name,
+      firstName: name.split(" ")[0] || "Patient",
+      age: patient.age || null,
+      dob: patient.date_of_birth || patient.dob || "",
+      bloodGroup: patient.blood_group || patient.bloodGroup || "Not specified",
+      uhid: patient.uhid || "",
+      phone: patient.phone || "",
+      email: patient.email || "",
     };
-
-    let storedRecords = null;
-    try {
-      const raw = localStorage.getItem('hc_records_' + pId);
-      if (raw) storedRecords = JSON.parse(raw);
-    } catch (e) {}
-
-    if (storedRecords && Array.isArray(storedRecords.visits) && storedRecords.visits.length > 0) {
-      STATE.visits = storedRecords.visits;
-      STATE.hospitals = storedRecords.hospitals || [];
-      STATE.changes = storedRecords.changes || [];
-      STATE.conflicts = storedRecords.conflicts || [];
-      STATE.decisionMemory = storedRecords.decisionMemory || null;
-      STATE.historicalMetrics = storedRecords.historicalMetrics || {};
-    } else {
-      STATE.visits = [];
-      STATE.hospitals = [];
-      STATE.changes = [];
-      STATE.conflicts = [];
-      STATE.decisionMemory = null;
-      STATE.historicalMetrics = {};
-    }
-
-    STATE.voiceCompanion.chatHistory = [
-      {
-        id: 'qa-welcome-' + Date.now(),
-        sender: 'companion',
-        questionNumber: 1,
-        text: `Hello ${pFirst}! Welcome to HealthContinuum AI. I'm Dr. Anya. Upload your medical reports or ask me any health questions.`,
-        timestamp: 'Just now',
-        source: null,
-        provider: 'Dr. Anya AI',
-      }
-    ];
+    // No localStorage or seeded-data fallback for authenticated patient records.
+    STATE.hospitals = [];
+    STATE.visits = [];
+    STATE.changes = [];
+    STATE.decisionMemory = null;
+    STATE.conflicts = [];
+    STATE.historicalMetrics = {};
+    STATE.voiceCompanion.chatHistory = [{
+      id: "qa-welcome-" + Date.now(),
+      sender: "companion",
+      questionNumber: 1,
+      text: `Hello ${STATE.patient.firstName}! Welcome to HealthContinuum AI. I'm Dr. Anya. Upload your medical reports or ask me about records in your account.`,
+      timestamp: "Just now",
+      source: null,
+      provider: "Dr. Anya AI",
+    }];
+    STATE.doctorAccess = { code: null, expiresInSeconds: 0, timerId: null, status: "NONE", pendingRequest: { doctorName: "", hospital: "", scope: "", requestedAt: "" } };
+    STATE.demoPreview = false;
   }
 
-  if (typeof window !== 'undefined') {
+  STATE.addRecordFlow = { step: 1, selectedType: "PRESCRIPTION", selectedHospital: "", selectedVisit: "", uploadedFileName: "", extractedData: null };
+  if (typeof window !== "undefined") {
     window.PATIENT_ID = STATE.patient.id;
-    if (window.API && typeof window.API.setActivePatientId === 'function') {
-      window.API.setActivePatientId(STATE.patient.id);
-    }
+    if (window.API && typeof window.API.setActivePatientId === "function") window.API.setActivePatientId(STATE.patient.id);
   }
 }
 
