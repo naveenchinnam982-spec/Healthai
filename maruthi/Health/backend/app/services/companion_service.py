@@ -827,7 +827,7 @@ def handle_report_value_query(records: dict[str, Any], query: str, language: str
         "uncertainty_notes": "Values and reference ranges are shown only when present in the stored record.",
         "suggested_next_actions": ["Ask your clinician to interpret the values if you are concerned."],
         "provider": "grounded_records_engine", "provider_note": "Laboratory values are taken from the patient's stored lab rows.",
-        "documented_facts": facts,
+        "documented_facts": lines,
     }
 
 
