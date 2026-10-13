@@ -694,94 +694,121 @@ function updateIosClock() {
 
 // ─── BACKEND SYNCHRONIZATION ───────────────────────────────────────────────
 async function syncWithBackend() {
+  if (window.DEMO_PREVIEW || STATE.demoPreview || !STATE.patient?.id) return false;
   try {
-    if (typeof window.checkBackend === 'function') {
-      STATE.backendConnected = await window.checkBackend();
+    const health = await window.API.health();
+    STATE.backendConnected = health?.success === true;
+    if (!STATE.backendConnected) {
+      console.warn("[HealthContinuum] API is unavailable; no synthetic patient records will be substituted.");
+      return false;
     }
-    if (!STATE.backendConnected && typeof window.API !== 'undefined') {
-      const h = await window.API.health();
-      STATE.backendConnected = h?.success === true;
+
+    const patientId = STATE.patient.id;
+    const [pRes, vRes, medRes, labRes, docRes, changeRes, memoryRes] = await Promise.all([
+      window.API.getPatient(patientId),
+      window.API.getVisits(patientId),
+      window.API.getMedications(patientId),
+      window.API.getLabs(patientId),
+      window.API.getDocuments(patientId),
+      window.API.getChanges(patientId),
+      window.API.getDecisionMemory(patientId),
+    ]);
+
+    if (pRes?.success && pRes.data) {
+      const p = pRes.data;
+      STATE.patient = {
+        ...STATE.patient,
+        id: p.id,
+        name: p.name || STATE.patient.name,
+        firstName: (p.name || STATE.patient.name || "Patient").split(" ")[0],
+        uhid: p.uhid || "",
+        bloodGroup: p.blood_group || "Not specified",
+        dob: p.date_of_birth || "",
+        phone: p.phone || "",
+        email: p.email || "",
+      };
     }
 
-    const patientId = STATE.patient?.id || (window.API && window.API.getActivePatientId && window.API.getActivePatientId());
-    const isRamesh = patientId === 'pat-ramesh-001';
+    const visits = vRes?.success && Array.isArray(vRes.data) ? vRes.data : [];
+    const medications = medRes?.success && Array.isArray(medRes.data) ? medRes.data : [];
+    const labs = labRes?.success && Array.isArray(labRes.data) ? labRes.data : [];
+    const documents = docRes?.success && Array.isArray(docRes.data) ? docRes.data : [];
+    const changes = changeRes?.success && Array.isArray(changeRes.data) ? changeRes.data : [];
 
-    if (STATE.backendConnected && window.API && patientId) {
-      console.info('[HealthContinuum] Loading real records from backend for patient:', patientId);
-      // 1. Patient info
-      const pRes = await window.API.getPatient(patientId);
-      if (pRes?.success && pRes.data) {
-        STATE.patient.name = pRes.data.name || STATE.patient.name;
-        STATE.patient.firstName = STATE.patient.name.split(' ')[0];
-        STATE.patient.uhid = pRes.data.uhid || STATE.patient.uhid;
-        if (pRes.data.blood_group) STATE.patient.bloodGroup = pRes.data.blood_group;
-        if (pRes.data.email) STATE.patient.email = pRes.data.email;
-        if (pRes.data.phone) STATE.patient.phone = pRes.data.phone;
-      }
+    STATE.visits = visits.map(v => ({
+      id: v.id,
+      date: formatDateStr(v.visit_date),
+      dateRaw: v.visit_date,
+      hospitalName: v.hospital_name || "Healthcare provider not specified",
+      doctorName: v.doctor_name || "Clinician not specified",
+      type: v.visit_type || "Consultation",
+      summary: v.summary || "",
+      medications: medications.filter(m => m.visit_id === v.id).map(m => ({
+        id: m.id, name: m.name, dose: m.dosage || "", freq: m.frequency || "",
+        status: m.status || "CURRENT", route: m.route || "",
+      })),
+      labs: labs.filter(l => l.visit_id === v.id).map(l => ({
+        id: l.id, test: l.test_name, value: l.value, unit: l.unit || "",
+        range: l.reference_range || "", date: l.test_date || "", status: "Recorded",
+      })),
+      documents: documents.filter(d => d.visit_id === v.id).map(d => ({
+        id: d.id, name: d.file_name || "Medical document", type: d.document_type,
+        file: d.file_url || "", date: formatDateStr((d.uploaded_at || "").slice(0, 10)),
+      })),
+    }));
 
-      // 2. Visits
-      const vRes = await window.API.getVisits(patientId);
-      if (vRes?.success && Array.isArray(vRes.data)) {
-        if (vRes.data.length > 0) {
-          // Map backend visits
-          STATE.visits = vRes.data.map(v => ({
-            id: v.id,
-            date: formatDateStr(v.visit_date),
-            dateRaw: v.visit_date,
-            hospitalName: v.hospital_name || (isRamesh ? 'City Care Hospital, Chennai' : 'Primary Care Center'),
-            doctorName: v.doctor_name || (isRamesh ? 'Dr. Priya Sharma' : 'Attending Physician'),
-            type: v.visit_type || 'Consultation',
-            summary: v.summary || '',
-            medications: Array.isArray(v.medications) ? v.medications : (isRamesh && v.id === 'visit-003' ? [
-              { name: 'Metformin', dose: '500 mg', freq: 'Once daily (morning)', status: 'CURRENT' },
-              { name: 'Aspirin', dose: '75 mg', freq: 'Once daily', status: 'CURRENT' },
-            ] : (isRamesh ? [
-              { name: 'Metformin', dose: '500 mg', freq: 'Twice daily', status: 'HISTORICAL' },
-            ] : [])),
-            labs: Array.isArray(v.labs) ? v.labs : (isRamesh && v.id === 'visit-003' ? [
-              { test: 'HbA1c', value: '6.5', unit: '%', range: '< 7.0', status: 'optimal' },
-              { test: 'eGFR', value: '82', unit: 'mL/min/1.73m²', range: '> 60', status: 'optimal' },
-            ] : (isRamesh && v.id === 'visit-002' ? [
-              { test: 'HbA1c', value: '7.1', unit: '%', range: '< 7.0', status: 'improving' },
-              { test: 'eGFR', value: '74', unit: 'mL/min/1.73m²', range: '> 60', status: 'optimal' },
-            ] : (isRamesh ? [
-              { test: 'HbA1c', value: '7.8', unit: '%', range: '< 7.0', status: 'elevated' },
-              { test: 'eGFR', value: '68', unit: 'mL/min/1.73m²', range: '> 60', status: 'optimal' },
-            ] : []))),
-            documents: Array.isArray(v.documents) && v.documents.length > 0 ? v.documents : [
-              { id: `doc-${v.id}`, name: `${v.visit_type || 'Clinical'} Record`, type: 'DOCTOR_NOTE', file: `record_${v.visit_date}.pdf`, date: formatDateStr(v.visit_date) }
-            ],
-          }));
-        } else if (!isRamesh) {
-          // New person with 0 visits in database: ensure clean visits list unless local cache has them
-          let localRec = null;
-          try { localRec = JSON.parse(localStorage.getItem('hc_records_' + patientId)); } catch (e) {}
-          if (localRec && Array.isArray(localRec.visits)) {
-            STATE.visits = localRec.visits;
-          } else {
-            STATE.visits = [];
-          }
-        }
-      }
+    STATE.hospitals = [...new Set(visits.map(v => v.hospital_name).filter(Boolean))].map((name, i) => ({
+      id: "hospital-" + i, name, shortName: name, visitCount: visits.filter(v => v.hospital_name === name).length,
+      recordCount: documents.length, doctor: visits.find(v => v.hospital_name === name)?.doctor_name || "",
+    }));
 
-      // 3. Decision Memory
-      const dmRes = await window.API.getDecisionMemory(patientId);
-      if (dmRes?.success && Array.isArray(dmRes.data) && dmRes.data[0]) {
-        const item = dmRes.data[0];
-        STATE.decisionMemory = {
-          finding: item.finding || (isRamesh ? STATE.decisionMemory.finding : ''),
-          decision: item.decision || (isRamesh ? STATE.decisionMemory.decision : ''),
-          reason: item.reason || (isRamesh ? STATE.decisionMemory.reason : ''),
-          evidence: item.evidence || (isRamesh ? STATE.decisionMemory.evidence : ''),
-          followUp: item.follow_up || (isRamesh ? STATE.decisionMemory.followUp : ''),
-          status: 'Verified from available records',
-        };
-      } else if (!isRamesh) {
-        STATE.decisionMemory = null;
-      }
+    STATE.changes = changes.map(ch => ({
+      id: ch.id,
+      title: ch.field_name || ch.change_type || "Clinical record change",
+      category: ch.change_type || "Record change",
+      previous: ch.previous_value || "Not recorded",
+      current: ch.current_value || "Not recorded",
+      date: formatDateStr((ch.created_at || "").slice(0, 10)),
+      hospital: "",
+      doctor: "",
+      reason: ch.reason_status === "EXPLAINED" ? "Reason documented in the clinical record." : "Reason requires clinical review.",
+      sourceDoc: "",
+      status: ch.review_status || "PENDING",
+      badgeText: ch.reason_status || "Needs review",
+      badgeType: ch.reason_status === "EXPLAINED" ? "verified" : "review",
+    }));
+
+    const memory = memoryRes?.success && Array.isArray(memoryRes.data) ? memoryRes.data[0] : null;
+    STATE.decisionMemory = memory ? {
+      finding: memory.finding || "",
+      decision: memory.decision || "",
+      reason: memory.reason || "",
+      evidence: memory.evidence || "",
+      followUp: memory.follow_up || "",
+      status: memory.verification_status || "Pending verification",
+    } : null;
+
+    const metricDefs = [
+      { key: "hba1c", names: ["hba1c", "glycated hemoglobin"], name: "HbA1c", unit: "%" },
+      { key: "egfr", names: ["egfr", "glomerular filtration"], name: "eGFR", unit: "mL/min/1.73m²" },
+      { key: "creatinine", names: ["creatinine"], name: "Serum Creatinine", unit: "mg/dL" },
+    ];
+    const historical = {};
+    for (const def of metricDefs) {
+      const points = labs.filter(l => def.names.some(n => String(l.test_name || "").toLowerCase().includes(n)))
+        .map(l => ({ date: formatDateStr(l.test_date || (l.created_at || "").slice(0, 10)), value: Number.parseFloat(l.value), status: "Recorded", docId: l.source_document_id || null, docName: l.test_name }))
+        .filter(p => Number.isFinite(p.value))
+        .sort((a, b) => String(a.date).localeCompare(String(b.date)));
+      if (points.length) historical[def.key] = { name: def.name, unit: def.unit, target: "", standardized: true, description: "Values transcribed from your uploaded records.", points };
     }
+    STATE.historicalMetrics = historical;
+    STATE.conflicts = [];
+    STATE.backendConnected = true;
+    return true;
   } catch (err) {
-    console.warn('[HealthContinuum] Backend sync error, continuing with local model:', err);
+    STATE.backendConnected = false;
+    console.warn("[HealthContinuum] Backend sync failed; keeping the authenticated profile without inventing medical records.", err);
+    return false;
   }
 }
 
