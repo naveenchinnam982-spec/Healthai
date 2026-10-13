@@ -9,7 +9,8 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, Text
+from sqlalchemy import DateTime, ForeignKey, Index, String, Text, JSON
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database.connection import Base
@@ -35,8 +36,12 @@ class DecisionMemory(Base):
         String(36), ForeignKey("patients.id", ondelete="CASCADE"), nullable=False
     )
     source_visit_id: Mapped[str | None] = mapped_column(
-        String(36), ForeignKey("visits.id", ondelete="SET NULL"), nullable=True
+        "visit_id", String(36), ForeignKey("visits.id", ondelete="SET NULL"), nullable=True
     )
+
+    title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    content: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    metadata_json: Mapped[dict] = mapped_column("metadata", JSON().with_variant(JSONB(), "postgresql"), default=dict, nullable=False)
 
     finding: Mapped[str | None] = mapped_column(Text, nullable=True)
     decision: Mapped[str] = mapped_column(Text, nullable=False)
