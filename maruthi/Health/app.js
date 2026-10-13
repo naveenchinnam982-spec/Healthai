@@ -2358,7 +2358,8 @@ async function handleSendCompanionMessage(questionText) {
     answerText = localMatch.answer;
     sourceObj = localMatch.source || sourceObj;
     citationsList = sourceObj ? [sourceObj] : [];
-    providerNoteStr = 'Grounded directly in patient database records';
+    providerNoteStr = (window.DEMO_PREVIEW || STATE.demoPreview) ? 'Synthetic sample data for preview only; not a real patient record.' : 'Could not verify this answer against your saved records.';
+    if (window.DEMO_PREVIEW || STATE.demoPreview) providerStr = 'synthetic_demo_preview';
     factsList = (localMatch.facts && localMatch.facts.length > 0) ? localMatch.facts : factsList;
   }
 
@@ -2392,6 +2393,13 @@ async function handleSendCompanionMessage(questionText) {
 
 // ─── LOCAL CLINICAL GROUNDING MATCHER (ZERO FABRICATION) ────────────────────
 function matchRecordLocally(query) {
+  if (!(window.DEMO_PREVIEW || STATE.demoPreview)) {
+    return {
+      answer: "I could not verify an answer against your saved medical records because the backend did not return one. Please try again when your connection is available.",
+      source: null,
+      facts: [],
+    };
+  }
   const q = (query || '').toLowerCase().trim();
   const isTe = /[\u0C00-\u0C7F]/.test(query) || STATE.lang === 'te';
 
@@ -3735,8 +3743,8 @@ function renderRecords() {
   if (!container) return;
 
   const totalVisits = STATE.visits?.length || 0;
-  const primaryHosp = STATE.hospitals?.[0]?.name || 'City Care Hospital, Chennai';
-  const primaryDoc = STATE.hospitals?.[0]?.doctor || 'Dr. Priya Sharma';
+  const primaryHosp = STATE.hospitals?.[0]?.name || 'Healthcare provider not recorded';
+  const primaryDoc = STATE.hospitals?.[0]?.doctor || 'Clinician not recorded';
   const totalDocs = STATE.visits.reduce((acc, v) => acc + (v.documents ? v.documents.length : 0), 0);
 
   if (totalVisits === 0) {
@@ -3841,11 +3849,11 @@ function viewDocumentDetail(title, fileName, date, docType = 'CLINICAL_RECORD') 
   const sheet = document.getElementById('doc-preview-sheet');
   if (!modal || !sheet) return;
 
-  const pName = STATE.patient?.name || 'Ramesh Kumar';
-  const pUhid = STATE.patient?.uhid || 'HC-2024-00847';
+  const pName = STATE.patient?.name || 'Patient';
+  const pUhid = STATE.patient?.uhid || 'Not recorded';
   const pAge = STATE.patient?.age ? `${STATE.patient.age}y` : '';
-  const pHosp = STATE.hospitals?.[0]?.name || 'City Care Hospital, Chennai';
-  const pDoc = STATE.hospitals?.[0]?.doctor || 'Dr. Priya Sharma';
+  const pHosp = STATE.hospitals?.[0]?.name || 'Healthcare provider not recorded';
+  const pDoc = STATE.hospitals?.[0]?.doctor || 'Clinician not recorded';
 
   sheet.innerHTML = `
     <div style="width:100%;padding:4px 0;">
@@ -3855,7 +3863,7 @@ function viewDocumentDetail(title, fileName, date, docType = 'CLINICAL_RECORD') 
           <span class="doc-stamp-badge">
             ✓ Verified Medical Record
           </span>
-          <span style="font-size:11px;color:var(--text-tertiary);">${date || '20 Jun 2026'}</span>
+          <span style="font-size:11px;color:var(--text-tertiary);">${date || 'Date not recorded'}</span>
         </div>
         <button class="btn-icon" onclick="closeDocPreview()">${getIcon('close', 'width:18px;height:18px;')}</button>
       </div>
