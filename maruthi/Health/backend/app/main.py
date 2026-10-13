@@ -200,12 +200,6 @@ async def require_supabase_session_and_ownership(request: Request, call_next):
                 if owned.scalar_one_or_none() is None:
                     return JSONResponse(status_code=403, content={"success": False, "error": {"code": "PATIENT_ACCESS_DENIED", "message": "You do not have access to this patient's access grants."}})
 
-            doctor_only = (
-                path in {"/api/doctor-access/verify", "/api/doctor-access/approve", "/api/doctor-access/grants", "/api/doctor-access/audit-events", "/api/doctor-access/review-action"}
-                or (path == "/api/doctor-access/review-queue" and request.method == "GET")
-                or path.startswith("/api/doctor-access/review-queue/")
-                or path.startswith("/api/doctor-access/permitted-records/")
-            )
             if doctor_only:
                 doctor_result = await db.execute(select(Doctor.id).where(Doctor.user_id == user_id, Doctor.is_active.is_(True)))
                 doctor_id = doctor_result.scalar_one_or_none()
