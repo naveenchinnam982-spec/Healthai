@@ -751,6 +751,29 @@ def handle_report_value_query(records: dict[str, Any], query: str, language: str
     requested_month = next((m for m, aliases in month_aliases.items() if any(re.search(r"\b" + re.escape(a) + r"\b", q_low) for a in aliases)), None)
     filtered_labs = labs
     if requested_month:
+        month_aliases_for_match = month_aliases[requested_month]
+        matching_documents = [
+            doc for doc in documents
+            if (
+                (getattr(doc, "uploaded_at", None) and doc.uploaded_at.month == requested_month)
+                or any(re.search(r"\\b" + re.escape(alias) + r"\\b", f"{doc.file_name or ''} {doc.extracted_text or ''}".lower()) for alias in month_aliases_for_match)
+            )
+        ]
+        if ("report" in q_low or "document" in q_low) and not matching_documents:
+            month_name = month_aliases[requested_month][0].title()
+            answer = (
+                f"మీకు అందుబాటులో ఉన్న పత్రాల్లో {month_name} నెల రిపోర్ట్ కనుగొనబడలేదు. విడిగా నమోదు చేసిన ల్యాబ్ విలువలు ఆ రిపోర్ట్‌ నుంచే వచ్చాయని నిర్ధారించలేను."
+                if language == "te"
+                else f"I could not find any report from {month_name} in your accessible documents. I cannot confirm that separately stored lab values came from that report."
+            )
+            return {
+                "answer": answer, "intent": INTENT_REPORT_VALUE_QUERY,
+                "safety_status": "INSUFFICIENT_EVIDENCE", "citations": [],
+                "uncertainty_notes": f"No uploaded document matching {month_name} was found.",
+                "suggested_next_actions": ["Upload the January report if you have it."],
+                "provider": "grounded_records_engine", "provider_note": "Report availability was checked separately from stored lab rows.",
+                "documented_facts": [],
+            }
         filtered_labs = [lab for lab in labs if f"-{requested_month:02d}-" in str(lab.test_date or "")]
         if not filtered_labs:
             month_name = month_aliases[requested_month][0].title()
