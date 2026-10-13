@@ -283,19 +283,30 @@ async def get_permitted_records(
     )
     change_events = changes_res.scalars().all()
 
-    # Format authoritative records
+    # Format only fields actually present in the patient's records.
+    age = None
+    if patient.date_of_birth:
+        try:
+            dob = datetime.strptime(str(patient.date_of_birth)[:10], "%Y-%m-%d").date()
+            today = datetime.now(timezone.utc).date()
+            age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+        except (ValueError, TypeError):
+            age = None
+    last_visit = max((v for v in visits if v.visit_date), key=lambda v: str(v.visit_date), default=None)
+    visits_by_id = {v.id: v for v in visits}
+
     patient_detail = {
         "id": patient.id,
         "appPatientId": patient.uhid or "",
         "fullName": patient.name,
-        "age": 42,
-        "sex": (patient.gender or "male").lower(),
-        "dateOfBirth": patient.date_of_birth or "1984-03-12",
-        "bloodGroup": patient.blood_group or "B+",
-        "phone": patient.phone or "+91 98765 43210",
-        "email": patient.email or "ramesh.kumar@synthetic.example",
-        "address": "42, 3rd Cross, Indiranagar, Bengaluru 560038",
-        "lastVisitDate": "2026-06-20",
+        "age": age,
+        "sex": (patient.gender or "Not recorded").lower(),
+        "dateOfBirth": patient.date_of_birth or None,
+        "bloodGroup": patient.blood_group or "Not recorded",
+        "phone": patient.phone or "",
+        "email": patient.email or "",
+        "address": None,
+        "lastVisitDate": last_visit.visit_date if last_visit else None,
         "authorizationStatus": "authorized" if is_authorized else "pending",
         "abhaId": None,
         "abhaLinked": False,
@@ -309,63 +320,65 @@ async def get_permitted_records(
             "genericName": m.name,
             "dosage": m.dosage or "",
             "frequency": m.frequency or "",
-            "route": m.route or "Oral",
+            "route": m.route or "Not recorded",
             "startDate": m.start_date,
             "endDate": m.end_date,
             "status": "active" if m.status == "CURRENT" else "discontinued",
-            "prescribedBy": "Dr. Priya Sharma",
-            "indication": "Type 2 Diabetes Mellitus" if "Metformin" in m.name else "Cardiovascular Care",
-            "notes": "Take with water after meals",
-            "confidence": "high",
+            "prescribedBy": (visits_by_id.get(m.visit_id).doctor_name if m.visit_id and visits_by_id.get(m.visit_id) else None),
+            "indication": None,
+            "notes": None,
+            "confidence": None,
         }
         for m in medications
     ]
 
     formatted_labs = [
         {
-            "id": l.id,
-            "patientId": l.patient_id,
-            "testName": l.test_name,
-            "category": "Metabolic Panel" if ("HbA1c" in l.test_name or "Glucose" in l.test_name) else "Renal Function",
-            "resultValue": l.value or "",
-            "unit": l.unit or "",
-            "referenceRange": l.reference_range or "",
-            "status": "abnormal" if (l.value and float(l.value) > 7.0 if l.test_name == "HbA1c" and l.value.replace(".", "", 1).isdigit() else False) else "normal",
-            "reportDate": l.test_date or "2026-06-20",
-            "laboratoryName": "City Care Diagnostics",
-            "interpretation": f"Patient value: {l.value} {l.unit or ''}",
-            "criticalAlert": False,
-            "confidence": "high",
+            "id": lab.id,
+            "patientId": lab.patient_id,
+            "testName": lab.test_name,
+            "category": "Laboratory",
+            "resultValue": lab.value or "",
+            "unit": lab.unit or "",
+            "referenceRange": lab.reference_range or "",
+            "status": "recorded",
+            "reportDate": lab.test_date or None,
+            "laboratoryName": None,
+            "interpretation": None,
+            "criticalAlert": None,
+            "confidence": None,
         }
-        for l in lab_results
+        for lab in lab_results
     ]
 
     formatted_docs = [
         {
-            "id": d.id,
-            "patientId": d.patient_id,
-            "title": (d.file_name or "Medical Document").replace("_", " ").title(),
-            "category": "prescriptions" if d.document_type == "PRESCRIPTION" else "documents",
-            "documentDate": d.uploaded_at.strftime("%Y-%m-%d") if d.uploaded_at else "2026-06-20",
-            "facilityName": "City Care Hospital, Chennai",
-            "fileType": "pdf",
-            "fileSize": "240 KB",
-            "verified": d.processing_status == "PROCESSED",
-            "needsReview": d.processing_status == "PENDING",
+            "id": doc.id,
+            "patientId": doc.patient_id,
+            "title": (doc.file_name or "Medical Document").replace("_", " ").title(),
+            "category": "prescriptions" if (doc.document_type or "").upper() == "PRESCRIPTION" else "documents",
+            "documentDate": doc.uploaded_at.strftime("%Y-%m-%d") if doc.uploaded_at else None,
+            "facilityName": (visits_by_id.get(doc.visit_id).hospital_name if doc.visit_id and visits_by_id.get(doc.visit_id) else None),
+            "fileType": (doc.file_name.rsplit(".", 1)[-1].lower() if doc.file_name and "." in doc.file_name else None),
+            "fileSize": None,
+            "verified": None,
+            "processingStatus": doc.processing_status,
+            "reviewStatus": doc.review_status,
+            "needsReview": (doc.review_status or "").upper() in {"PENDING", "NEEDS_REVIEW"},
         }
-        for d in documents
+        for doc in documents
     ]
 
     formatted_visits = [
         {
-            "id": v.id,
-            "date": v.visit_date,
-            "hospital": v.hospital_name or "City Care Hospital, Chennai",
-            "doctor": v.doctor_name or "Dr. Priya Sharma",
-            "type": v.visit_type or "Consultation",
-            "summary": v.summary or "",
+            "id": visit.id,
+            "date": visit.visit_date or None,
+            "hospital": visit.hospital_name or "Not recorded",
+            "doctor": visit.doctor_name or "Not recorded",
+            "type": visit.visit_type or "Not recorded",
+            "summary": visit.summary or "",
         }
-        for v in visits
+        for visit in visits
     ]
 
     formatted_reviews = [
