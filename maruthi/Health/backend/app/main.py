@@ -7,6 +7,8 @@ import logging
 from contextlib import asynccontextmanager
 
 from pathlib import Path
+import re
+from urllib.parse import unquote
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -27,7 +29,14 @@ from app.api.routes import (
     visits,
 )
 from app.core.config import get_settings
-from app.database.connection import create_all_tables
+from app.database.connection import AsyncSessionLocal, create_all_tables
+from app.core.supabase_auth import bearer_token, verify_supabase_access_token
+from app.models.patient import Patient
+from app.models.document import Document
+from app.models.change_event import ChangeEvent
+from app.models.doctor import Doctor
+from app.models.doctor_access import DoctorAccess, ReviewQueueItem
+from sqlalchemy import select
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("healthcontinuum")
@@ -40,8 +49,15 @@ settings = get_settings()
 async def lifespan(app: FastAPI):
     """Startup: create tables. Shutdown: clean up."""
     logger.info("Starting HealthContinuum AI backend...")
-    await create_all_tables()
-    logger.info("Database tables verified.")
+    if settings.app_env.lower() in {"production", "prod"}:
+        if not settings.database_url.startswith(("postgresql+asyncpg://", "postgresql://")):
+            raise RuntimeError("Production requires DATABASE_URL pointing to Supabase PostgreSQL; SQLite is not allowed.")
+        if not settings.supabase_url or not settings.supabase_anon_key:
+            raise RuntimeError("Production requires SUPABASE_URL and SUPABASE_ANON_KEY for Supabase Auth verification.")
+        logger.info("Production schema must be managed by versioned SQL migrations; automatic create_all is disabled.")
+    else:
+        await create_all_tables()
+        logger.info("Development/test database tables verified.")
     yield
     logger.info("HealthContinuum AI backend shutting down.")
 
@@ -63,11 +79,139 @@ app = FastAPI(
 # ── CORS ──────────────────────────────────────────────────────────────────────
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins + ["*"],   # "*" for local file:// dev
+    allow_origins=settings.cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ── Supabase Auth + patient ownership boundary ─────────────────────────────────
+LEGACY_AUTH_PATHS = {
+    "/api/auth/login",
+    "/api/auth/register",
+    "/api/auth/google",
+    "/api/auth/doctor/login",
+}
+
+
+@app.middleware("http")
+async def require_supabase_session_and_ownership(request: Request, call_next):
+    path = request.url.path
+    if request.method == "OPTIONS" or not path.startswith("/api/"):
+        return await call_next(request)
+    if path in {"/api/health", "/api/docs", "/api/redoc", "/api/openapi.json"}:
+        return await call_next(request)
+    if path in LEGACY_AUTH_PATHS:
+        return JSONResponse(
+            status_code=410,
+            content={"success": False, "error": {"code": "USE_SUPABASE_AUTH", "message": "Use Supabase Auth for sign-in and registration."}},
+        )
+    # Existing unit/integration tests use an isolated in-memory database and explicit fixtures.
+    # This bypass is enabled only by the test runner's APP_ENV=test setting.
+    if settings.app_env.lower() in {"test", "testing"}:
+        return await call_next(request)
+
+    token = bearer_token(request)
+    if not token:
+        return JSONResponse(
+            status_code=401,
+            headers={"WWW-Authenticate": "Bearer"},
+            content={"success": False, "error": {"code": "AUTH_REQUIRED", "message": "Please sign in to access patient records."}},
+        )
+    try:
+        user = await verify_supabase_access_token(token)
+    except Exception as exc:
+        from fastapi import HTTPException
+        if isinstance(exc, HTTPException):
+            return JSONResponse(status_code=exc.status_code, headers=exc.headers or {}, content={"success": False, "error": exc.detail})
+        logger.exception("Supabase session verification failed")
+        return JSONResponse(status_code=503, content={"success": False, "error": {"code": "AUTH_UNAVAILABLE", "message": "Could not verify the Supabase session."}})
+    request.state.supabase_user = user
+    user_id = str(user["id"])
+
+    # The API uses a server-side PostgreSQL connection, which bypasses RLS. Enforce
+    # ownership here before any route can read or mutate a patient's records.
+    try:
+        async with AsyncSessionLocal() as db:
+            patient_match = re.match(r"^/api/patients/([^/]+)(?:/.*)?$", path)
+            if patient_match:
+                patient_id = unquote(patient_match.group(1))
+                owned = await db.execute(select(Patient.id).where(Patient.id == patient_id, Patient.owner_id == user_id))
+                if owned.scalar_one_or_none() is None:
+                    return JSONResponse(status_code=403, content={"success": False, "error": {"code": "PATIENT_ACCESS_DENIED", "message": "You do not have access to this patient's records."}})
+
+            document_match = re.match(r"^/api/documents/([^/]+)(?:/.*)?$", path)
+            if document_match and document_match.group(1) != "upload":
+                document_id = unquote(document_match.group(1))
+                result = await db.execute(select(Document.patient_id).where(Document.id == document_id))
+                patient_id = result.scalar_one_or_none()
+                if patient_id is not None:
+                    owned = await db.execute(select(Patient.id).where(Patient.id == patient_id, Patient.owner_id == user_id))
+                    if owned.scalar_one_or_none() is None:
+                        return JSONResponse(status_code=403, content={"success": False, "error": {"code": "DOCUMENT_ACCESS_DENIED", "message": "You do not have access to this document."}})
+
+            change_match = re.match(r"^/api/changes/([^/]+)(?:/.*)?$", path)
+            if change_match:
+                change_id = unquote(change_match.group(1))
+                result = await db.execute(select(ChangeEvent.patient_id).where(ChangeEvent.id == change_id))
+                patient_id = result.scalar_one_or_none()
+                if patient_id is not None:
+                    owned = await db.execute(select(Patient.id).where(Patient.id == patient_id, Patient.owner_id == user_id))
+                    if owned.scalar_one_or_none() is None:
+                        return JSONResponse(status_code=403, content={"success": False, "error": {"code": "CHANGE_ACCESS_DENIED", "message": "You do not have access to this patient's change records."}})
+
+            # Patient-owned doctor-access history is protected by the patient owner.
+            reserved = {"generate", "verify", "revoke", "approve", "permitted-records", "grants", "audit-events", "review-action", "review-queue"}
+            access_patient_match = re.match(r"^/api/doctor-access/([^/]+)$", path)
+            if access_patient_match and access_patient_match.group(1) not in reserved:
+                patient_id = unquote(access_patient_match.group(1))
+                owned = await db.execute(select(Patient.id).where(Patient.id == patient_id, Patient.owner_id == user_id))
+                if owned.scalar_one_or_none() is None:
+                    return JSONResponse(status_code=403, content={"success": False, "error": {"code": "PATIENT_ACCESS_DENIED", "message": "You do not have access to this patient's access grants."}})
+
+            doctor_only = (
+                path in {"/api/doctor-access/verify", "/api/doctor-access/approve", "/api/doctor-access/grants", "/api/doctor-access/audit-events", "/api/doctor-access/review-action", "/api/doctor-access/review-queue"}
+                or path.startswith("/api/doctor-access/review-queue/")
+                or path.startswith("/api/doctor-access/permitted-records/")
+            )
+            if doctor_only:
+                doctor_result = await db.execute(select(Doctor.id).where(Doctor.user_id == user_id, Doctor.is_active.is_(True)))
+                doctor_id = doctor_result.scalar_one_or_none()
+                if doctor_id is None:
+                    return JSONResponse(status_code=403, content={"success": False, "error": {"code": "DOCTOR_ACCESS_REQUIRED", "message": "An active doctor account is required for this action."}})
+                patient_path_match = re.match(r"^/api/doctor-access/(?:permitted-records|review-queue/summary)/([^/]+)$", path)
+                if patient_path_match:
+                    patient_id = unquote(patient_path_match.group(1))
+                    grant = await db.execute(select(DoctorAccess.id).where(
+                        DoctorAccess.patient_id == patient_id,
+                        DoctorAccess.doctor_id == doctor_id,
+                        DoctorAccess.status == "ACTIVE",
+                        DoctorAccess.revoked_at.is_(None),
+                        DoctorAccess.expires_at > datetime.now(timezone.utc),
+                    ))
+                    if grant.scalar_one_or_none() is None:
+                        return JSONResponse(status_code=403, content={"success": False, "error": {"code": "DOCTOR_GRANT_REQUIRED", "message": "No active patient-approved access grant was found."}})
+                item_match = re.match(r"^/api/doctor-access/review-queue/([^/]+)/resolve$", path)
+                if item_match:
+                    item_result = await db.execute(select(ReviewQueueItem.patient_id).where(ReviewQueueItem.id == unquote(item_match.group(1))))
+                    patient_id = item_result.scalar_one_or_none()
+                    if patient_id is not None:
+                        grant = await db.execute(select(DoctorAccess.id).where(
+                            DoctorAccess.patient_id == patient_id,
+                            DoctorAccess.doctor_id == doctor_id,
+                            DoctorAccess.status == "ACTIVE",
+                            DoctorAccess.revoked_at.is_(None),
+                            DoctorAccess.expires_at > datetime.now(timezone.utc),
+                        ))
+                        if grant.scalar_one_or_none() is None:
+                            return JSONResponse(status_code=403, content={"success": False, "error": {"code": "DOCTOR_GRANT_REQUIRED", "message": "An active patient-approved access grant is required."}})
+    except Exception:
+        logger.exception("API ownership check failed")
+        return JSONResponse(status_code=503, content={"success": False, "error": {"code": "OWNERSHIP_CHECK_FAILED", "message": "Patient access could not be verified."}})
+
+    return await call_next(request)
+
 
 # ── Global exception handler ──────────────────────────────────────────────────
 @app.exception_handler(Exception)
