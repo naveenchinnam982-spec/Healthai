@@ -303,10 +303,7 @@ alter table public.audit_logs enable row level security;
 
 drop policy if exists profiles_select_self on public.profiles;
 create policy profiles_select_self on public.profiles for select to authenticated using (id = auth.uid());
-drop policy if exists profiles_insert_self on public.profiles;
-create policy profiles_insert_self on public.profiles for insert to authenticated with check (id = auth.uid());
-drop policy if exists profiles_update_self on public.profiles;
-create policy profiles_update_self on public.profiles for update to authenticated using (id = auth.uid()) with check (id = auth.uid());
+revoke insert, update on table public.profiles from anon, authenticated;
 
 drop policy if exists patients_select_authorized on public.patients;
 create policy patients_select_authorized on public.patients for select to authenticated using (owner_id = auth.uid() or public.can_access_patient(id::text));
