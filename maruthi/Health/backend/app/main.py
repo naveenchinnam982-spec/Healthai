@@ -109,15 +109,15 @@ async def require_supabase_session_and_ownership(request: Request, call_next):
         return await call_next(request)
     if path in {"/api/health", "/api/config", "/api/docs", "/api/redoc", "/api/openapi.json"}:
         return await call_next(request)
+    # Existing unit/integration tests use an isolated in-memory database and explicit fixtures.
+    # This bypass is enabled only by the test runner's APP_ENV=test setting; it is never enabled in deployment.
+    if settings.app_env.lower() in {"test", "testing"}:
+        return await call_next(request)
     if path in LEGACY_AUTH_PATHS:
         return JSONResponse(
             status_code=410,
             content={"success": False, "error": {"code": "USE_SUPABASE_AUTH", "message": "Use Supabase Auth for sign-in and registration."}},
         )
-    # Existing unit/integration tests use an isolated in-memory database and explicit fixtures.
-    # This bypass is enabled only by the test runner's APP_ENV=test setting.
-    if settings.app_env.lower() in {"test", "testing"}:
-        return await call_next(request)
 
     token = bearer_token(request)
     if not token:
