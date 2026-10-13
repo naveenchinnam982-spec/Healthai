@@ -52,7 +52,8 @@ create table if not exists public.visits (
   doctor_name text,
   visit_type text,
   summary text,
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
 );
 
 create table if not exists public.documents (
@@ -104,6 +105,7 @@ create table if not exists public.clinical_decisions (
   id text primary key,
   patient_id text not null references public.patients(id) on delete cascade,
   visit_id text references public.visits(id) on delete set null,
+  evidence_document_id text references public.documents(id) on delete set null,
   decision text not null,
   reason text,
   confidence double precision,
