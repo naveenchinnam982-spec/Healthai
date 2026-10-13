@@ -39,7 +39,7 @@ async def generate_access(
         doctor_name=doctor_name,
         doctor_email=doctor_email,
         requested_scopes=scopes or ["medical_history", "medications", "reports", "changes", "documents"],
-        purpose="DEMO_PURPOSE_ONLY",
+        purpose="PATIENT_APPROVED_CLINICAL_REVIEW",
         status="ACTIVE",
         attempts=0,
         max_attempts=5,
@@ -55,7 +55,7 @@ async def generate_access(
         action="PIN_GENERATED",
         patient_id=patient_id,
         resource_type="shared_access_grant",
-        purpose="DEMO_PURPOSE_ONLY",
+        purpose="PATIENT_APPROVED_CLINICAL_REVIEW",
         outcome="success",
         detail="Patient generated 20-minute demonstration access PIN.",
     )
@@ -119,7 +119,7 @@ async def redeem_pin(
             actor_role="doctor",
             action="PIN_ATTEMPT",
             resource_type="shared_access_grant",
-            purpose="DEMO_PURPOSE_ONLY",
+            purpose="PATIENT_APPROVED_CLINICAL_REVIEW",
             outcome="denied",
             detail="Invalid demonstration PIN entered.",
         )
