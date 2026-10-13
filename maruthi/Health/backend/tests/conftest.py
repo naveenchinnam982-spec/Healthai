@@ -1,10 +1,10 @@
-import os
-os.environ.setdefault("APP_ENV", "test")
-
 """
 Shared Pytest Configuration and Fixtures for HealthContinuum AI
 """
 from __future__ import annotations
+
+import os
+os.environ.setdefault("APP_ENV", "test")
 
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
