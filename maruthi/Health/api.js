@@ -9,7 +9,7 @@ const API_BASE = (typeof window !== 'undefined' && window.location && window.loc
   ? `${window.location.origin}/api`
   : 'http://127.0.0.1:8000/api';
 
-let CURRENT_PATIENT_ID = (typeof localStorage !== 'undefined' && localStorage.getItem('hc_patient_id')) || 'pat-ramesh-001';
+let CURRENT_PATIENT_ID = (typeof localStorage !== 'undefined' && localStorage.getItem('hc_patient_id')) || '';
 
 function getActivePatientId() {
   if (typeof window !== 'undefined' && window.PATIENT_ID) return window.PATIENT_ID;
@@ -24,20 +24,57 @@ function setActivePatientId(id) {
 }
 
 // ─── Base REST fetch fallback ────────────────────────────────────────────────
-async function apiFetch(path, options = {}) {
+async function getSupabaseClient() {
+  if (!window.HC_SUPABASE_READY) throw new Error("Supabase client has not been initialized.");
+  const client = await window.HC_SUPABASE_READY;
+  if (!client) throw new Error(window.HC_SUPABASE_ERROR?.message || "Supabase is not configured.");
+  return client;
+}
+
+async function getSessionToken() {
   try {
-    const res = await fetch(`${API_BASE}${path}`, {
-      headers: { 'Content-Type': 'application/json', ...(typeof localStorage !== 'undefined' && localStorage.getItem('hc_access_token') ? { Authorization: 'Bearer ' + localStorage.getItem('hc_access_token') } : {}), ...options.headers },
-      ...options,
-    });
-    const json = await res.json();
+    const client = await getSupabaseClient();
+    const { data, error } = await client.auth.getSession();
+    if (error) throw error;
+    return data?.session?.access_token || "";
+  } catch (error) {
+    return "";
+  }
+}
+
+async function apiFetch(path, options = {}) {
+  if (typeof window !== "undefined" && window.DEMO_PREVIEW && path !== "/health") {
+    return { success: false, error: { code: "DEMO_PREVIEW_READ_ONLY", message: "This is a read-only synthetic preview. Sign in to use real patient data." } };
+  }
+  try {
+    const token = await getSessionToken();
+    const isFormData = typeof FormData !== "undefined" && options.body instanceof FormData;
+    const headers = {
+      Accept: "application/json",
+      ...(isFormData ? {} : { "Content-Type": "application/json" }),
+      ...(token ? { Authorization: "Bearer " + token } : {}),
+      ...(options.headers || {}),
+    };
+    const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
+    const raw = await res.text();
+    let json = {};
+    try { json = raw ? JSON.parse(raw) : {}; } catch (_) {
+      json = { success: false, error: { code: "INVALID_API_RESPONSE", message: "The server returned an unexpected response." } };
+    }
     if (!res.ok) {
-      console.warn(`[API] ${options.method || 'GET'} ${path} → ${res.status}`, json);
+      const detail = json?.detail;
+      return {
+        success: false,
+        error: {
+          code: detail?.code || json?.error?.code || "API_ERROR",
+          message: detail?.message || json?.error?.message || json?.message || `Request failed (${res.status}).`,
+        },
+      };
     }
     return json;
   } catch (err) {
-    console.debug(`[API] REST endpoint unreachable: ${path}`);
-    return { success: false, error: { code: 'NETWORK_ERROR', message: err.message } };
+    console.warn(`[API] REST endpoint unreachable: ${path}`, err);
+    return { success: false, error: { code: "NETWORK_ERROR", message: "Unable to reach the API. Check deployment and backend configuration." } };
   }
 }
 
@@ -52,33 +89,90 @@ const API = {
     return apiFetch('/health');
   },
 
-  /** POST /auth/login — no local/demo token fallback. */
-  login: async (identifier, password = '', rememberMe = true) => {
-    const res = await apiFetch('/auth/login', { method: 'POST', body: JSON.stringify({ identifier, password, remember_me: rememberMe }) });
-    if (res?.success && res.data?.patient?.id) {
-      setActivePatientId(res.data.patient.id);
-      try { localStorage.setItem('hc_access_token', res.data.access_token || ''); } catch (e) {}
+  /** Supabase email/phone password sign-in, followed by profile bootstrap. */
+  login: async (identifier, password = "", rememberMe = true) => {
+    try {
+      const client = await getSupabaseClient();
+      const clean = String(identifier || "").trim();
+      const credentials = clean.includes("@") ? { email: clean, password } : (/^\+?[0-9 ()-]{8,}$/.test(clean) ? { phone: clean.replace(/[ ()-]/g, ""), password } : null);
+      if (!credentials) return { success: false, error: { code: "INVALID_IDENTIFIER", message: "Sign in with the email address or phone number linked to your Supabase account." } };
+      const { data, error } = await client.auth.signInWithPassword(credentials);
+      if (error) return { success: false, error: { code: "INVALID_CREDENTIALS", message: error.message } };
+      if (!data?.session?.access_token) return { success: false, error: { code: "NO_SESSION", message: "Supabase did not create a sign-in session." } };
+      return await API.bootstrapProfile(data.user?.user_metadata?.full_name || null);
+    } catch (error) {
+      return { success: false, error: { code: "SUPABASE_AUTH_ERROR", message: error.message || "Supabase sign-in failed." } };
     }
+  },
+
+  /** Supabase Auth registration. Email confirmation may be required by project settings. */
+  register: async (name, email = "", phone = "", password = "") => {
+    try {
+      const client = await getSupabaseClient();
+      if (!String(email || "").trim()) return { success: false, error: { code: "EMAIL_REQUIRED", message: "Enter an email address to create your account." } };
+      if (!password || password.length < 8) return { success: false, error: { code: "WEAK_PASSWORD", message: "Use a passcode with at least 8 characters." } };
+      const { data, error } = await client.auth.signUp({
+        email: String(email).trim(),
+        password,
+        options: { data: { full_name: String(name || "").trim(), phone: String(phone || "").trim() || null } },
+      });
+      if (error) return { success: false, error: { code: "REGISTRATION_FAILED", message: error.message } };
+      if (!data?.session?.access_token) {
+        return { success: false, error: { code: "EMAIL_CONFIRMATION_REQUIRED", message: "Account created. Verify the link sent to your email, then sign in." } };
+      }
+      return await API.bootstrapProfile(name);
+    } catch (error) {
+      return { success: false, error: { code: "SUPABASE_AUTH_ERROR", message: error.message || "Supabase registration failed." } };
+    }
+  },
+
+  /** Start Google OAuth through Supabase; the configured redirect returns to this app. */
+  googleAuth: async () => {
+    try {
+      const client = await getSupabaseClient();
+      const { error } = await client.auth.signInWithOAuth({
+        provider: "google",
+        options: { redirectTo: window.location.origin },
+      });
+      if (error) return { success: false, error: { code: "OAUTH_FAILED", message: error.message } };
+      return { success: true, redirecting: true };
+    } catch (error) {
+      return { success: false, error: { code: "OAUTH_NOT_CONFIGURED", message: error.message || "Configure Google OAuth in Supabase first." } };
+    }
+  },
+
+  bootstrapProfile: async (fullName = null) => {
+    const body = fullName ? JSON.stringify({ full_name: fullName }) : JSON.stringify({});
+    const res = await apiFetch("/auth/profile", { method: "POST", body });
+    if (res?.success && res.data?.patient?.id) setActivePatientId(res.data.patient.id);
     return res;
   },
 
-  /** POST /auth/register — no local/demo token fallback. */
-  register: async (name, email = '', phone = '', password = '') => {
-    const res = await apiFetch('/auth/register', { method: 'POST', body: JSON.stringify({ name, email, phone, password }) });
-    if (res?.success && res.data?.patient?.id) {
-      setActivePatientId(res.data.patient.id);
-      try { localStorage.setItem('hc_access_token', res.data.access_token || ''); } catch (e) {}
+  restoreSession: async () => {
+    try {
+      const client = await getSupabaseClient();
+      const { data, error } = await client.auth.getSession();
+      if (error || !data?.session?.access_token) return null;
+      return await API.bootstrapProfile(data.session.user?.user_metadata?.full_name || null);
+    } catch (_) {
+      return null;
     }
-    return res;
   },
 
-  /** Google auth must use configured Supabase OAuth; never trust a client-supplied email. */
-  googleAuth: async () => ({ success: false, error: { code: 'OAUTH_NOT_CONFIGURED', message: 'Google sign-in is not configured yet. Please use email and password.' } }),
-
-  /** GET /auth/me */
-  getCurrentUser: async (token) => {
-    return apiFetch(`/auth/me${token ? `?token=${encodeURIComponent(token)}` : ''}`);
+  logout: async () => {
+    try {
+      const client = await getSupabaseClient();
+      await client.auth.signOut();
+    } finally {
+      try { localStorage.removeItem("hc_patient_id"); } catch (_) {}
+      try { localStorage.removeItem("hc_auth_user"); } catch (_) {}
+      try { localStorage.removeItem("hc_access_token"); } catch (_) {}
+      CURRENT_PATIENT_ID = "";
+    }
   },
+
+  /** GET /auth/me; profile data is bound to the verified Supabase session. */
+  getCurrentUser: async () => apiFetch("/auth/me"),
 
   /** GET /patients/{id} */
   getPatient: async (id = getActivePatientId()) => {
@@ -107,39 +201,20 @@ const API = {
   },
 
   /** GET /patients/{id}/documents */
-  getDocuments: async (id = getActivePatientId(), type = null) => {
-    
-    return apiFetch(`/patients/${id}/documents${type ? `?document_type=${type}` : ''}`);
-  },
+  getDocuments: async (id = getActivePatientId(), type = null) =>
+    apiFetch(`/patients/${encodeURIComponent(id)}/documents${type ? `?document_type=${encodeURIComponent(type)}` : ""}`),
 
-  /** POST /patients/{id}/documents/upload or /patients/{id}/documents */
+  /** Upload a real file; the API proxy attaches the Supabase session. */
   uploadDocument: async (id = getActivePatientId(), payload = {}) => {
-    // Check if real File object is provided
-    if (payload.file instanceof File || payload.file instanceof Blob) {
-      try {
-        const formData = new FormData();
-        formData.append('file', payload.file, payload.file.name || payload.file_name || 'document.pdf');
-        formData.append('patient_id', id);
-        if (payload.document_type) formData.append('document_type', payload.document_type);
-        if (payload.visit_id) formData.append('visit_id', payload.visit_id);
-
-        const res = await fetch(`${API_BASE}/patients/${id}/documents/upload`, {
-          method: 'POST',
-          body: formData,
-        });
-        const json = await res.json();
-        if (json && json.success) return json;
-      } catch (err) {
-        console.warn('[API] Multipart upload failed, falling back to JSON:', err);
-      }
+    if (!id) return { success: false, error: { code: "PATIENT_REQUIRED", message: "Sign in before uploading a medical document." } };
+    if (typeof File !== "undefined" && (payload.file instanceof File || payload.file instanceof Blob)) {
+      const formData = new FormData();
+      formData.append("file", payload.file, payload.file.name || payload.file_name || "document.pdf");
+      if (payload.document_type) formData.append("document_type", payload.document_type);
+      if (payload.visit_id) formData.append("visit_id", payload.visit_id);
+      return apiFetch(`/patients/${encodeURIComponent(id)}/documents/upload`, { method: "POST", body: formData });
     }
-
-    
-
-    return apiFetch(`/patients/${id}/documents`, {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    });
+    return apiFetch(`/patients/${encodeURIComponent(id)}/documents`, { method: "POST", body: JSON.stringify(payload) });
   },
 
   /** POST /documents/{id}/review */
