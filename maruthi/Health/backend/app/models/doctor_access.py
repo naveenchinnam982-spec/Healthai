@@ -46,7 +46,7 @@ class DoctorAccess(Base):
         default=lambda: ["medical_history", "medications", "reports", "changes", "documents"]
     )
 
-    purpose: Mapped[str] = mapped_column(String(100), default="DEMO_PURPOSE_ONLY", nullable=False)
+    purpose: Mapped[str] = mapped_column(String(100), default="PATIENT_APPROVED_CLINICAL_REVIEW", nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="PENDING", nullable=False)
     # ACTIVE | REVOKED | EXPIRED | DECLINED
 
