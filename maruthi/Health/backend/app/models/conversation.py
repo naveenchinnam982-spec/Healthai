@@ -33,7 +33,7 @@ class Conversation(Base):
     patient_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("patients.id", ondelete="CASCADE"), nullable=False
     )
-    title: Mapped[str] = mapped_column(String(255), default="Health Conversation", nullable=False)
+    title: Mapped[str | None] = mapped_column(String(255), default="Health Conversation", nullable=True)
     language: Mapped[str] = mapped_column(String(10), default="en", nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
