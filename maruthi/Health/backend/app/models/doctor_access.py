@@ -7,7 +7,8 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, JSON
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database.connection import Base
@@ -34,36 +35,37 @@ class DoctorAccess(Base):
         String(36), ForeignKey("patients.id", ondelete="CASCADE"), nullable=False
     )
 
-    access_code: Mapped[str] = mapped_column(String(10), nullable=False, unique=True)
-    pin_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    code_hash: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
     doctor_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     doctor_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     doctor_email: Mapped[str | None] = mapped_column(String(200), nullable=True)
 
     # What information the doctor requested / was granted access to
-    requested_scopes: Mapped[str | None] = mapped_column(
-        Text, nullable=True, default="medical_history,medications,reports,changes,documents"
+    requested_scopes: Mapped[list[str]] = mapped_column(
+        "scope", JSONB().with_variant(JSON(), "sqlite"), nullable=False,
+        default=lambda: ["medical_history", "medications", "reports", "changes", "documents"]
     )
-    # Stored as comma-separated: "medical_history,medications,reports,changes"
 
     purpose: Mapped[str] = mapped_column(String(100), default="DEMO_PURPOSE_ONLY", nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="PENDING", nullable=False)
     # PENDING | APPROVED | DECLINED | EXPIRED | REVOKED
 
-    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    attempts: Mapped[int] = mapped_column("attempts_used", Integer, default=0, nullable=False)
     max_attempts: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
 
-    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     revoked_by: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    doctor_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    doctor_email: Mapped[str | None] = mapped_column(String(200), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
     # ── Relationships ────────────────────────────────────────────────────────
     patient: Mapped["Patient"] = relationship("Patient", back_populates="doctor_accesses")  # noqa: F821
 
     def __repr__(self) -> str:
-        return f"<DoctorAccess id={self.id!r} code={self.access_code!r} status={self.status!r}>"
+        return f"<DoctorAccess id={self.id!r} status={self.status!r}>"
 
 
 class ReviewQueueItem(Base):
