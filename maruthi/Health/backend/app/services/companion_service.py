@@ -430,7 +430,7 @@ def handle_historical_comparison(records: dict[str, Any], query: str, language: 
                 value=f"{latest.value} {latest.unit or ''}",
             ))
 
-    if not comparisons:
+    if not comparisons and not incompatible_units:
         # Check if we have changes
         changes: list[ChangeEvent] = records.get("changes", [])
         for c in changes:
@@ -447,23 +447,27 @@ def handle_historical_comparison(records: dict[str, Any], query: str, language: 
             ))
 
     if not comparisons:
-        if language == "te":
-            answer = "పోల్చడానికి మీ రికార్డులలో తగినంత బహుళ పరీక్ష ఫలితాలు లభించలేదు. పోలిక చేయడానికి ఒకే పరీక్షకు సంబంధించిన కనీసం రెండు తేదీల ఫలితాలు అవసరం."
-        else:
-            answer = "There are insufficient historical measurements in your records to perform a multi-point comparison. A valid comparison requires at least two documented dates for the same test."
+        reason = " ".join(incompatible_units) if incompatible_units else "At least two dated results for the same test are needed."
+        answer = (
+            "మీ రికార్డుల్లో పోల్చదగిన రెండు తేదీల ఫలితాలు లేవు లేదా యూనిట్లు సరిపోలడం లేదు. " + reason
+            if language == "te"
+            else "There are not enough comparable dated results to calculate a trend. " + reason
+        )
         return {
             "answer": answer,
             "intent": INTENT_HISTORICAL_COMPARISON,
             "safety_status": "INSUFFICIENT_EVIDENCE",
-            "citations": [],
-            "uncertainty_notes": "Single point data only. Minimum 2 comparable dates required.",
-            "suggested_next_actions": ["Upload prior laboratory reports to unlock historical comparisons."],
+            "citations": citations,
+            "uncertainty_notes": reason,
+            "suggested_next_actions": ["Upload prior laboratory reports or ask your clinician to review the recorded values."],
             "provider": "grounded_records_engine",
-            "provider_note": "Comparison eligibility check failed: insufficient historical points.",
-            "documented_facts": [],
+            "provider_note": "Comparison skipped when there were too few readings or recorded units differed.",
+            "documented_facts": incompatible_units,
         }
 
     comp_text = "\n".join(comparisons)
+    if incompatible_units:
+        comp_text += "\n\nNot compared: " + " ".join(incompatible_units)
     if language == "te":
         answer = (
             f"📊 మీ రికార్డుల నుండి ధృవీకరించబడిన చారిత్రక పోలిక:\n\n{comp_text}\n\n"
