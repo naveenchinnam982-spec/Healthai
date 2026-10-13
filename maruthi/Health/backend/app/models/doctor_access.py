@@ -80,7 +80,7 @@ class ReviewQueueItem(Base):
         String(36), ForeignKey("patients.id", ondelete="CASCADE"), nullable=False
     )
     doctor_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
-    access_code: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    access_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
 
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     document_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
