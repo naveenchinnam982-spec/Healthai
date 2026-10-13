@@ -1216,7 +1216,7 @@ function renderLogin() {
 
         <div class="backend-status-pill" id="backend-status-indicator" title="Supabase Auth and patient API">
           <div class="pulse-dot"></div>
-          <span style="font-size:11px;">${isConnected ? 'Backend Live' : 'Backend Ready'}</span>
+          <span style="font-size:11px;">${isConnected ? 'Backend Live' : 'Secure sign-in'}</span>
         </div>
       </div>
 
@@ -1412,6 +1412,7 @@ function renderHome() {
   const userInitials = (STATE.patient?.name || 'Patient').split(' ').filter(Boolean).map(n => n[0]).join('').substring(0, 2).toUpperCase() || 'PT';
 
   container.innerHTML = `
+    ${STATE.demoPreview ? '<div role="status" style="padding:10px 14px;margin:10px 0;background:#fff7ed;border:1px solid #fed7aa;border-radius:12px;color:#9a3412;font-size:12px;font-weight:700;">DEMO PREVIEW · Synthetic data only · Read-only · Not a signed-in patient account</div>' : ''}
     <!-- 1. HEADER: BRAND LOGO + TITLE + LANGUAGE SWITCHER + AVATAR + NOTIFICATION BELL -->
     <header class="hc-home-header">
       <div class="hc-brand-left">
@@ -4970,26 +4971,17 @@ async function initApp() {
   updateIosClock();
   setInterval(updateIosClock, 10000);
 
-  // Restore existing session if present, otherwise show login
-  let hasSession = false;
-  try {
-    const savedUserJson = localStorage.getItem('hc_auth_user');
-    if (savedUserJson) {
-      const savedUser = JSON.parse(savedUserJson);
-      if (savedUser?.patient) {
-        loadPatientData(savedUser.patient);
-        hasSession = true;
-      }
-    }
-  } catch (e) {}
-
-  setTimeout(() => {
-    if (hasSession) {
-      navigate('home');
+  // Restore only a verified Supabase session; never trust a cached patient object as authentication.
+  setTimeout(async () => {
+    const restored = await window.API.restoreSession();
+    if (restored?.success && restored.data?.patient?.id) {
+      await handleAuthSuccess(restored.data, true);
     } else {
+      window.DEMO_PREVIEW = false;
+      loadPatientData({});
       navigate('login');
     }
-  }, 1400);
+  }, 700);
 }
 
 document.addEventListener('DOMContentLoaded', initApp);
