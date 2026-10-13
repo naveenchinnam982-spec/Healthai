@@ -1043,7 +1043,7 @@ function renderLogin() {
   if (!container) return;
 
   const isConnected = STATE.backendConnected;
-  const patientUhid = STATE.patient?.uhid || 'HC-2024-00847';
+  const patientUhid = '';
 
   let tabBodyHtml = '';
 
@@ -1053,20 +1053,20 @@ function renderLogin() {
         <div id="auth-alert" style="display:none;"></div>
 
         <div class="input-group">
-          <label class="input-label" for="login-identifier">Patient UHID, Email, or Mobile</label>
+          <label class="input-label" for="login-identifier">Email Address or Phone Number</label>
           <input class="input-field" type="text" id="login-identifier" required 
-                 placeholder="e.g. HC-2024-00847 or ramesh.kumar@synthetic.example" 
+                 placeholder="patient@example.com or +91 98765 43210" 
                  value="${patientUhid}" />
         </div>
 
         <div class="input-group">
           <div style="display:flex;justify-content:space-between;align-items:center;">
             <label class="input-label" for="login-password">Passcode</label>
-            <span style="font-size:12px;color:var(--blue);cursor:pointer;font-weight:600;" onclick="fillDemoCredentials()">Use demo (password123)</span>
+            
           </div>
           <div style="position:relative;display:flex;align-items:center;">
             <input class="input-field" type="password" id="login-password" required 
-                   placeholder="Enter your passcode" value="password123" style="padding-right:44px;" />
+                   placeholder="Enter your passcode" style="padding-right:44px;" />
             <button type="button" class="btn-icon" id="btn-toggle-pwd" onclick="togglePasswordVisibility('login-password', this)" 
                     style="position:absolute;right:8px;color:var(--text-tertiary);padding:6px;font-size:14px;" title="Toggle passcode">
               👁️
@@ -1106,7 +1106,7 @@ function renderLogin() {
         <div id="auth-alert" style="display:none;"></div>
 
         <p style="font-size:13px;color:var(--text-secondary);margin:0 0 4px;">
-          Instantly test HealthContinuum AI with pre-configured synthetic longitudinal data:
+          Explore the sample patient journey using synthetic data. Preview mode is read-only and does not sign in to an account:
         </p>
 
         <div class="quick-profile-card" onclick="handleQuickDemoLogin()" style="border-left:4px solid var(--blue);">
@@ -1133,7 +1133,7 @@ function renderLogin() {
         </div>
 
         <button type="button" class="btn btn-primary btn-full" id="btn-demo-login" onclick="handleQuickDemoLogin()" style="height:48px;font-size:14.5px;font-weight:600;margin-top:4px;">
-          <span>Explore as Ramesh Kumar</span>
+          <span>Explore synthetic preview (read-only)</span>
         </button>
 
         <div style="padding:12px;background:#f8fafc;border-radius:12px;border:1px dashed #cbd5e1;font-size:12px;color:var(--text-secondary);line-height:1.5;">
@@ -1153,7 +1153,7 @@ function renderLogin() {
 
         <div class="input-group">
           <label class="input-label" for="reg-email">Email Address</label>
-          <input class="input-field" type="email" id="reg-email" placeholder="patient@example.com" />
+          <input class="input-field" type="email" id="reg-email" placeholder="patient@example.com" required />
         </div>
 
         <div class="input-group">
@@ -1163,7 +1163,7 @@ function renderLogin() {
 
         <div class="input-group">
           <label class="input-label" for="reg-password">Create Passcode</label>
-          <input class="input-field" type="password" id="reg-password" required placeholder="Choose a passcode" value="password123" />
+          <input class="input-field" type="password" id="reg-password" required placeholder="At least 8 characters" />
         </div>
 
         <button type="submit" class="btn btn-primary btn-full" id="btn-reg-submit" style="height:50px;font-size:15px;font-weight:600;margin-top:4px;">
@@ -1187,7 +1187,7 @@ function renderLogin() {
           </div>
         </div>
 
-        <div class="backend-status-pill" id="backend-status-indicator" title="Connected to FastAPI & Cloud Firestore">
+        <div class="backend-status-pill" id="backend-status-indicator" title="Supabase Auth and patient API">
           <div class="pulse-dot"></div>
           <span style="font-size:11px;">${isConnected ? 'Backend Live' : 'Backend Ready'}</span>
         </div>
@@ -1225,7 +1225,7 @@ function renderLogin() {
       <div style="margin-top:24px;padding:12px 14px;background:rgba(37,99,235,0.05);border-radius:14px;border:1px solid rgba(37,99,235,0.12);display:flex;gap:10px;align-items:flex-start;">
         <div style="color:var(--blue);margin-top:1px;">${getIcon('shield', 'width:18px;height:18px;')}</div>
         <div style="font-size:11.5px;color:var(--text-secondary);line-height:1.45;">
-          <strong style="color:var(--text-primary);">HIPAA & Privacy Assured:</strong> All records are end-to-end encrypted. Doctors receive temporary read-only access strictly upon your approval.
+          <strong style="color:var(--text-primary);">Privacy first:</strong> Sign-in is required for personal records. Clinician access is limited by patient-approved sharing permissions.
         </div>
       </div>
     </div>
@@ -1274,10 +1274,7 @@ function togglePasswordVisibility(fieldId, btnEl) {
 }
 
 function fillDemoCredentials() {
-  const idEl = document.getElementById('login-identifier');
-  const pwdEl = document.getElementById('login-password');
-  if (idEl) idEl.value = 'HC-2024-00847';
-  if (pwdEl) pwdEl.value = 'password123';
+  setAuthTab("demo");
 }
 
 async function handleLoginSubmit() {
@@ -1309,37 +1306,29 @@ async function handleLoginSubmit() {
 
 async function handleGoogleLogin() {
   const btn = document.getElementById('btn-google-auth');
-  showAuthError('Google sign-in is not configured yet. Please use email and password.');
-  setAuthLoading(btn, false, 'Continue with Google');
+  setAuthLoading(btn, true, 'Connecting to Google...');
+  const result = await window.API.googleAuth();
+  if (!result?.success) {
+    showAuthError(result?.error?.message || 'Google sign-in could not start. Check Supabase OAuth settings.');
+    setAuthLoading(btn, false, 'Continue with Google');
+  }
 }
 
 async function handleQuickDemoLogin() {
-  const btn = document.getElementById('btn-demo-login') || document.getElementById('btn-login-submit');
-  setAuthLoading(btn, true, 'Signing in as Ramesh...');
-
-  try {
-    const res = await window.API.login('HC-2024-00847', 'password123', true);
-    if (res?.success && res.data) {
-      await handleAuthSuccess(res.data, true);
-    } else {
-      await handleAuthSuccess({
-        access_token: 'demo-token-001',
-        patient: { id: 'pat-ramesh-001', name: 'Ramesh Kumar', uhid: 'HC-2024-00847', email: 'ramesh.kumar@synthetic.example', phone: '+91 98765 43210' },
-      }, true);
-    }
-  } catch (err) {
-    await handleAuthSuccess({
-      access_token: 'demo-token-001',
-      patient: { id: 'pat-ramesh-001', name: 'Ramesh Kumar', uhid: 'HC-2024-00847', email: 'ramesh.kumar@synthetic.example', phone: '+91 98765 43210' },
-    }, true);
-  }
+  // Synthetic preview only: never create a fake token or authenticated session.
+  window.DEMO_PREVIEW = true;
+  STATE.demoPreview = true;
+  loadPatientData(DEMO_RAMESH_DATA.patient);
+  STATE.backendConnected = false;
+  showAuthSuccess('Read-only sample preview opened. No real patient account is signed in.');
+  navigate('home');
 }
 
 async function handleRegisterSubmit() {
   const name = document.getElementById('reg-name')?.value.trim();
   const email = document.getElementById('reg-email')?.value.trim();
   const phone = document.getElementById('reg-phone')?.value.trim();
-  const password = document.getElementById('reg-password')?.value || 'password123';
+  const password = document.getElementById('reg-password')?.value || '';
   const btn = document.getElementById('btn-reg-submit');
 
   if (!name) {
@@ -1364,39 +1353,24 @@ async function handleRegisterSubmit() {
 }
 
 async function handleAuthSuccess(authData, remember) {
-  if (authData.patient) {
-    loadPatientData(authData.patient);
-  }
-  if (authData.access_token) {
-    window.AUTH_TOKEN = authData.access_token;
-  }
-  if (remember) {
-    try {
-      localStorage.setItem('hc_auth_user', JSON.stringify({
-        token: authData.access_token,
-        patient: STATE.patient,
-        timestamp: Date.now(),
-      }));
-    } catch (e) {}
+  window.DEMO_PREVIEW = false;
+  STATE.demoPreview = false;
+  if (authData?.patient) loadPatientData(authData.patient);
+  else {
+    showAuthError('Your account profile could not be loaded. Please sign in again.');
+    return;
   }
 
-  showAuthSuccess(`Welcome, ${STATE.patient.firstName}! Loading dashboard...`);
-
-  // Refresh real backend data
+  showAuthSuccess(`Welcome, ${STATE.patient.firstName}! Loading your records...`);
   await syncWithBackend();
-
-  setTimeout(() => {
-    navigate('home');
-  }, 400);
+  setTimeout(() => navigate('home'), 250);
 }
 
 async function handleLogout() {
-  try {
-    localStorage.removeItem('hc_auth_user');
-    localStorage.removeItem('hc_patient_id');
-  } catch (e) {}
-  try { localStorage.removeItem('hc_access_token'); } catch (e) {}
-loadPatientData({ id: '', name: '', email: '', uhid: '' });
+  try { await window.API.logout(); } catch (error) { console.warn('[Auth] Sign-out error:', error); }
+  window.DEMO_PREVIEW = false;
+  window.AUTH_TOKEN = null;
+  loadPatientData({});
   closeProfileDrawer();
   navigate('login');
 }
