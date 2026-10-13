@@ -108,8 +108,8 @@ async def _get_or_create_patient(
 
 @router.post("/profile")
 async def bootstrap_profile(
+    request: Request,
     payload: ProfileRequest | None = None,
-    request: Request = None,  # type: ignore[assignment]
     db: AsyncSession = Depends(get_db),
 ):
     """Idempotently create/load the patient profile for the verified Supabase user."""
