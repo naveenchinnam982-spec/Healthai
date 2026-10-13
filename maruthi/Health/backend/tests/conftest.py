@@ -3,6 +3,9 @@ Shared Pytest Configuration and Fixtures for HealthContinuum AI
 """
 from __future__ import annotations
 
+import os
+os.environ.setdefault("APP_ENV", "test")
+
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine

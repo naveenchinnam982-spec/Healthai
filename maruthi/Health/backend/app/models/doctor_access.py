@@ -7,7 +7,8 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, JSON
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database.connection import Base
@@ -25,7 +26,7 @@ class DoctorAccess(Base):
     __tablename__ = "doctor_accesses"
     __table_args__ = (
         Index("ix_doctor_accesses_patient_id", "patient_id"),
-        Index("ix_doctor_accesses_access_code", "access_code"),
+        Index("ix_doctor_accesses_code_hash", "code_hash"),
         Index("ix_doctor_accesses_status", "status"),
     )
 
@@ -34,26 +35,25 @@ class DoctorAccess(Base):
         String(36), ForeignKey("patients.id", ondelete="CASCADE"), nullable=False
     )
 
-    access_code: Mapped[str] = mapped_column(String(10), nullable=False, unique=True)
-    pin_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    code_hash: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
     doctor_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     doctor_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     doctor_email: Mapped[str | None] = mapped_column(String(200), nullable=True)
 
     # What information the doctor requested / was granted access to
-    requested_scopes: Mapped[str | None] = mapped_column(
-        Text, nullable=True, default="medical_history,medications,reports,changes,documents"
+    requested_scopes: Mapped[list[str]] = mapped_column(
+        "scope", JSONB().with_variant(JSON(), "sqlite"), nullable=False,
+        default=lambda: ["medical_history", "medications", "reports", "changes", "documents"]
     )
-    # Stored as comma-separated: "medical_history,medications,reports,changes"
 
-    purpose: Mapped[str] = mapped_column(String(100), default="DEMO_PURPOSE_ONLY", nullable=False)
+    purpose: Mapped[str] = mapped_column(String(100), default="PATIENT_APPROVED_CLINICAL_REVIEW", nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="PENDING", nullable=False)
-    # PENDING | APPROVED | DECLINED | EXPIRED | REVOKED
+    # ACTIVE | REVOKED | EXPIRED | DECLINED
 
-    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    attempts: Mapped[int] = mapped_column("attempts_used", Integer, default=0, nullable=False)
     max_attempts: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
 
-    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     revoked_by: Mapped[str | None] = mapped_column(String(200), nullable=True)
@@ -63,7 +63,7 @@ class DoctorAccess(Base):
     patient: Mapped["Patient"] = relationship("Patient", back_populates="doctor_accesses")  # noqa: F821
 
     def __repr__(self) -> str:
-        return f"<DoctorAccess id={self.id!r} code={self.access_code!r} status={self.status!r}>"
+        return f"<DoctorAccess id={self.id!r} status={self.status!r}>"
 
 
 class ReviewQueueItem(Base):
@@ -78,21 +78,27 @@ class ReviewQueueItem(Base):
         String(36), ForeignKey("patients.id", ondelete="CASCADE"), nullable=False
     )
     doctor_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
-    access_code: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    access_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
 
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     document_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     document_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    change_event_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     item_type: Mapped[str] = mapped_column(String(50), default="PRESCRIPTION_HANDWRITING")
     field_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     candidate_value: Mapped[str | None] = mapped_column(Text, nullable=True)
     uncertainty_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
     patient_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     doctor_response: Mapped[str | None] = mapped_column(Text, nullable=True)
+    resolution: Mapped[str | None] = mapped_column(Text, nullable=True)
+    resolution_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reviewed_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="PENDING")
     priority: Mapped[str] = mapped_column(String(20), default="ROUTINE")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
     def __repr__(self) -> str:
         return f"<ReviewQueueItem id={self.id!r} title={self.title!r} status={self.status!r}>"

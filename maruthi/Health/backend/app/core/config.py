@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     # ── Application ─────────────────────────────────────────────────────────
     app_name: str = "HealthContinuum AI"
     app_env: str = "development"
-    debug: bool = True
+    debug: bool = False
 
     # ── Database ──────────────────────────────────────────────────────────────
     database_url: str = "sqlite+aiosqlite:///./healthcontinuum.db"

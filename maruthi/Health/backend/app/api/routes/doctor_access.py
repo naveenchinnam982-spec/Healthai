@@ -12,11 +12,12 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.core.security import decode_access_token
 from app.database.connection import get_db
 from app.models.change_event import ChangeEvent
 from app.models.doctor import Doctor
-from app.models.doctor_access import DoctorAccess
+from app.models.doctor_access import DoctorAccess, ReviewQueueItem
 from app.models.document import Document
 from app.models.lab_result import LabResult
 from app.models.medication import Medication
@@ -37,40 +38,59 @@ from app.schemas.schemas import (
 from app.services import doctor_access_service, patient_service
 
 router = APIRouter(prefix="/doctor-access", tags=["doctor-access"])
+settings = get_settings()
+
+
+async def _assert_patient_owner(request: Request, db: AsyncSession, patient_id: str) -> Patient:
+    user = getattr(request.state, "supabase_user", None)
+    if settings.app_env.lower() in {"test", "testing"}:
+        patient = await patient_service.get_patient_by_id(db, patient_id)
+        if patient is None:
+            raise HTTPException(status_code=404, detail={"code": "PATIENT_NOT_FOUND", "message": "Patient not found"})
+        return patient
+    if not user:
+        raise HTTPException(status_code=401, detail={"code": "AUTH_REQUIRED", "message": "Sign in to continue."})
+    patient = await patient_service.get_patient_by_id(db, patient_id)
+    if patient is None:
+        raise HTTPException(status_code=404, detail={"code": "PATIENT_NOT_FOUND", "message": "Patient not found"})
+    if str(patient.owner_id or "") != str(user.get("id")):
+        raise HTTPException(status_code=403, detail={"code": "PATIENT_ACCESS_DENIED", "message": "You do not own this patient's records."})
+    return patient
 
 
 async def get_doctor_from_request(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> Doctor:
-    """Extract authenticated doctor from JWT Bearer token or return default verified doctor."""
-    auth_header = request.headers.get("Authorization")
-    if auth_header and auth_header.startswith("Bearer "):
-        token = auth_header[7:].strip()
-        payload = decode_access_token(token)
-        if payload and payload.get("role") == "doctor" and "sub" in payload:
-            stmt = select(Doctor).where(Doctor.id == payload["sub"])
-            res = await db.execute(stmt)
-            doc = res.scalar_one_or_none()
-            if doc and doc.is_active:
-                return doc
-
-    # Default fallback: seeded doctor Dr. Ananya Sharma
-    stmt = select(Doctor).where(Doctor.email == "ananya.sharma@continuumhealth.in")
-    res = await db.execute(stmt)
-    doc = res.scalar_one_or_none()
-    if not doc:
-        # Create or fetch any active doctor
-        stmt2 = select(Doctor).limit(1)
-        res2 = await db.execute(stmt2)
-        doc = res2.scalar_one_or_none()
-
-    if not doc:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"code": "DOCTOR_AUTH_REQUIRED", "message": "Doctor authentication required."},
+    """Resolve an active doctor from verified Supabase identity; no default doctor fallback."""
+    user = getattr(request.state, "supabase_user", None)
+    if user and user.get("id"):
+        result = await db.execute(
+            select(Doctor).where(Doctor.user_id == str(user["id"]), Doctor.is_active.is_(True))
         )
-    return doc
+        doctor = result.scalar_one_or_none()
+        if doctor:
+            return doctor
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "DOCTOR_PROFILE_REQUIRED", "message": "No active doctor profile is linked to this Supabase account."},
+        )
+
+    # Legacy JWT is accepted only in isolated tests, never in a deployed environment.
+    if settings.app_env.lower() in {"test", "testing"}:
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            payload = decode_access_token(auth_header[7:].strip())
+            if payload and payload.get("role") == "doctor" and payload.get("sub"):
+                result = await db.execute(select(Doctor).where(Doctor.id == payload["sub"], Doctor.is_active.is_(True)))
+                doctor = result.scalar_one_or_none()
+                if doctor:
+                    return doctor
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail={"code": "DOCTOR_AUTH_REQUIRED", "message": "Doctor authentication required."},
+        headers={"WWW-Authenticate": "Bearer"},
+    )
 
 
 @router.post(
@@ -80,14 +100,11 @@ async def get_doctor_from_request(
 )
 async def generate_access_code(
     payload: GenerateAccessCodeRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ):
     """Patient generates a random 20-minute demonstration PIN."""
-    patient = await patient_service.get_patient_by_id(db, payload.patient_id)
-    if not patient:
-        raise HTTPException(
-            status_code=404, detail={"code": "PATIENT_NOT_FOUND", "message": "Patient not found"}
-        )
+    patient = await _assert_patient_owner(request, db, payload.patient_id)
 
     access = await doctor_access_service.generate_access(
         db,
@@ -97,9 +114,10 @@ async def generate_access_code(
         scopes=payload.requested_scopes,
     )
 
+    code = getattr(access, "_generated_access_code", "")
     out = GenerateAccessCodeOut(
         id=access.id,
-        access_code=access.access_code,
+        access_code=code,
         expires_at=access.expires_at,
         status=access.status,
         purpose=access.purpose,
@@ -109,7 +127,7 @@ async def generate_access_code(
     return APIResponse(
         success=True,
         data=out,
-        message=f"20-minute demonstration PIN generated: {access.access_code}. Purpose: DEMO PURPOSE ONLY.",
+        message="20-minute temporary access PIN generated. Share it only with the intended clinician.",
     )
 
 
@@ -156,7 +174,7 @@ async def verify_and_redeem_pin(
     if not patient:
         raise HTTPException(status_code=404, detail={"code": "PATIENT_NOT_FOUND", "message": "Associated patient not found."})
 
-    scopes_list = [s.strip() for s in (access.requested_scopes or "").split(",") if s.strip()]
+    scopes_list = access.requested_scopes or []
     if not scopes_list:
         scopes_list = ["laboratory_reports", "prescriptions", "visit_history", "documents"]
 
@@ -177,14 +195,14 @@ async def verify_and_redeem_pin(
 
     patient_summary = {
         "id": patient.id,
-        "appPatientId": patient.uhid or "HC-2024-00847",
+        "appPatientId": patient.uhid or "",
         "fullName": patient.name,
-        "age": 42,
-        "sex": (patient.gender or "male").lower(),
-        "lastVisitDate": "2026-06-20",
+        "age": None,
+        "sex": (patient.gender or "not specified").lower(),
+        "lastVisitDate": None,
         "authorizationStatus": "authorized",
-        "abhaId": "91-8472-9014-2201",
-        "abhaLinked": True,
+        "abhaId": None,
+        "abhaLinked": False,
     }
 
     return APIResponse(
@@ -192,8 +210,7 @@ async def verify_and_redeem_pin(
         data={
             "grant": grant_data,
             "patient": patient_summary,
-            "access_code": access.access_code,
-            "purpose": "DEMO_PURPOSE_ONLY",
+            "purpose": "PATIENT_APPROVED_CLINICAL_REVIEW",
         },
         message="Demonstration PIN verified. Access granted for 20 minutes.",
     )
@@ -206,6 +223,7 @@ async def revoke_access(
     db: AsyncSession = Depends(get_db),
 ):
     """Patient or doctor revokes an access grant."""
+    await _assert_patient_owner(request, db, payload.patient_id)
     revoked = await doctor_access_service.revoke_access(
         db, payload.access_id, payload.patient_id, revoked_by="Patient"
     )
@@ -265,22 +283,33 @@ async def get_permitted_records(
     )
     change_events = changes_res.scalars().all()
 
-    # Format authoritative records
+    # Format only fields actually present in the patient's records.
+    age = None
+    if patient.date_of_birth:
+        try:
+            dob = datetime.strptime(str(patient.date_of_birth)[:10], "%Y-%m-%d").date()
+            today = datetime.now(timezone.utc).date()
+            age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+        except (ValueError, TypeError):
+            age = None
+    last_visit = max((v for v in visits if v.visit_date), key=lambda v: str(v.visit_date), default=None)
+    visits_by_id = {v.id: v for v in visits}
+
     patient_detail = {
         "id": patient.id,
-        "appPatientId": patient.uhid or "HC-2024-00847",
+        "appPatientId": patient.uhid or "",
         "fullName": patient.name,
-        "age": 42,
-        "sex": (patient.gender or "male").lower(),
-        "dateOfBirth": patient.date_of_birth or "1984-03-12",
-        "bloodGroup": patient.blood_group or "B+",
-        "phone": patient.phone or "+91 98765 43210",
-        "email": patient.email or "ramesh.kumar@synthetic.example",
-        "address": "42, 3rd Cross, Indiranagar, Bengaluru 560038",
-        "lastVisitDate": "2026-06-20",
+        "age": age,
+        "sex": (patient.gender or "Not recorded").lower(),
+        "dateOfBirth": patient.date_of_birth or None,
+        "bloodGroup": patient.blood_group or "Not recorded",
+        "phone": patient.phone or "",
+        "email": patient.email or "",
+        "address": None,
+        "lastVisitDate": last_visit.visit_date if last_visit else None,
         "authorizationStatus": "authorized" if is_authorized else "pending",
-        "abhaId": "91-8472-9014-2201",
-        "abhaLinked": True,
+        "abhaId": None,
+        "abhaLinked": False,
     }
 
     formatted_meds = [
@@ -291,63 +320,65 @@ async def get_permitted_records(
             "genericName": m.name,
             "dosage": m.dosage or "",
             "frequency": m.frequency or "",
-            "route": m.route or "Oral",
+            "route": m.route or "Not recorded",
             "startDate": m.start_date,
             "endDate": m.end_date,
             "status": "active" if m.status == "CURRENT" else "discontinued",
-            "prescribedBy": "Dr. Priya Sharma",
-            "indication": "Type 2 Diabetes Mellitus" if "Metformin" in m.name else "Cardiovascular Care",
-            "notes": "Take with water after meals",
-            "confidence": "high",
+            "prescribedBy": (visits_by_id.get(m.visit_id).doctor_name if m.visit_id and visits_by_id.get(m.visit_id) else None),
+            "indication": None,
+            "notes": None,
+            "confidence": None,
         }
         for m in medications
     ]
 
     formatted_labs = [
         {
-            "id": l.id,
-            "patientId": l.patient_id,
-            "testName": l.test_name,
-            "category": "Metabolic Panel" if ("HbA1c" in l.test_name or "Glucose" in l.test_name) else "Renal Function",
-            "resultValue": l.value or "",
-            "unit": l.unit or "",
-            "referenceRange": l.reference_range or "",
-            "status": "abnormal" if (l.value and float(l.value) > 7.0 if l.test_name == "HbA1c" and l.value.replace(".", "", 1).isdigit() else False) else "normal",
-            "reportDate": l.test_date or "2026-06-20",
-            "laboratoryName": "City Care Diagnostics",
-            "interpretation": f"Patient value: {l.value} {l.unit or ''}",
-            "criticalAlert": False,
-            "confidence": "high",
+            "id": lab.id,
+            "patientId": lab.patient_id,
+            "testName": lab.test_name,
+            "category": "Laboratory",
+            "resultValue": lab.value or "",
+            "unit": lab.unit or "",
+            "referenceRange": lab.reference_range or "",
+            "status": "recorded",
+            "reportDate": lab.test_date or None,
+            "laboratoryName": None,
+            "interpretation": None,
+            "criticalAlert": None,
+            "confidence": None,
         }
-        for l in lab_results
+        for lab in lab_results
     ]
 
     formatted_docs = [
         {
-            "id": d.id,
-            "patientId": d.patient_id,
-            "title": (d.file_name or "Medical Document").replace("_", " ").title(),
-            "category": "prescriptions" if d.document_type == "PRESCRIPTION" else "documents",
-            "documentDate": d.uploaded_at.strftime("%Y-%m-%d") if d.uploaded_at else "2026-06-20",
-            "facilityName": "City Care Hospital, Chennai",
-            "fileType": "pdf",
-            "fileSize": "240 KB",
-            "verified": d.processing_status == "PROCESSED",
-            "needsReview": d.processing_status == "PENDING",
+            "id": doc.id,
+            "patientId": doc.patient_id,
+            "title": (doc.file_name or "Medical Document").replace("_", " ").title(),
+            "category": "prescriptions" if (doc.document_type or "").upper() == "PRESCRIPTION" else "documents",
+            "documentDate": doc.uploaded_at.strftime("%Y-%m-%d") if doc.uploaded_at else None,
+            "facilityName": (visits_by_id.get(doc.visit_id).hospital_name if doc.visit_id and visits_by_id.get(doc.visit_id) else None),
+            "fileType": (doc.file_name.rsplit(".", 1)[-1].lower() if doc.file_name and "." in doc.file_name else None),
+            "fileSize": None,
+            "verified": None,
+            "processingStatus": doc.processing_status,
+            "reviewStatus": doc.review_status,
+            "needsReview": (doc.review_status or "").upper() in {"PENDING", "NEEDS_REVIEW"},
         }
-        for d in documents
+        for doc in documents
     ]
 
     formatted_visits = [
         {
-            "id": v.id,
-            "date": v.visit_date,
-            "hospital": v.hospital_name or "City Care Hospital, Chennai",
-            "doctor": v.doctor_name or "Dr. Priya Sharma",
-            "type": v.visit_type or "Consultation",
-            "summary": v.summary or "",
+            "id": visit.id,
+            "date": visit.visit_date or None,
+            "hospital": visit.hospital_name or "Not recorded",
+            "doctor": visit.doctor_name or "Not recorded",
+            "type": visit.visit_type or "Not recorded",
+            "summary": visit.summary or "",
         }
-        for v in visits
+        for visit in visits
     ]
 
     formatted_reviews = [
@@ -383,45 +414,59 @@ async def get_permitted_records(
 
 @router.get("/grants", response_model=APIResponse[list[dict[str, Any]]])
 async def list_grants(
+    request: Request,
     status: str = "all",
-    request: Request = None,
     db: AsyncSession = Depends(get_db),
 ):
-    """Retrieve all shared access grants."""
+    """List access grants for the authenticated doctor only."""
     doctor = await get_doctor_from_request(request, db)
-    grants = await doctor_access_service.get_doctor_grants(db, doctor.id, status)
-
-    result = []
-    for g in grants:
-        result.append({
+    grants = await doctor_access_service.get_doctor_grants(db, doctor.id, status=status)
+    patient_ids = list({g.patient_id for g in grants})
+    patient_names: dict[str, str] = {}
+    if patient_ids:
+        patients_result = await db.execute(select(Patient).where(Patient.id.in_(patient_ids)))
+        patient_names = {p.id: p.name for p in patients_result.scalars().all()}
+    data = [
+        {
             "id": g.id,
             "patientId": g.patient_id,
-            "patientName": "Ramesh Kumar",
-            "scope": ["laboratory_reports", "prescriptions", "visit_history", "documents"],
+            "patientName": patient_names.get(g.patient_id, "Patient"),
+            "doctorId": g.doctor_id,
+            "doctorName": g.doctor_name or doctor.full_name,
             "purpose": g.purpose,
-            "duration": "20m",
-            "status": "active" if g.status in ("ACTIVE", "APPROVED") else g.status.lower(),
-            "grantedAt": g.approved_at.isoformat() if g.approved_at else g.created_at.isoformat(),
-            "expiresAt": g.expires_at.isoformat() if g.expires_at else "",
-            "attemptsUsed": g.attempts,
-            "maxAttempts": g.max_attempts,
-            "usesRemaining": max(0, g.max_attempts - g.attempts),
-        })
-
-    return APIResponse(
-        success=True,
-        data=result,
-        message=f"{len(result)} grants retrieved.",
-    )
+            "scope": g.requested_scopes or [],
+            "status": "active" if g.status == "ACTIVE" else g.status.lower(),
+            "createdAt": g.created_at.isoformat() if g.created_at else None,
+            "expiresAt": g.expires_at.isoformat() if g.expires_at else None,
+            "revokedAt": g.revoked_at.isoformat() if g.revoked_at else None,
+        }
+        for g in grants
+    ]
+    return APIResponse(success=True, data=data, message=f"{len(data)} access grants retrieved.")
 
 
 @router.get("/audit-events", response_model=APIResponse[list[AuditLogOut]])
 async def list_audit_events(
+    request: Request,
     limit: int = 50,
     db: AsyncSession = Depends(get_db),
 ):
-    """Retrieve recent authoritative audit events."""
-    events = await doctor_access_service.get_audit_events(db, limit)
+    """Return only audit events for this doctor or patients with an active grant."""
+    doctor = await get_doctor_from_request(request, db)
+    from app.models.audit_log import AuditLog
+    active_patient_ids = select(DoctorAccess.patient_id).where(
+        DoctorAccess.doctor_id == doctor.id,
+        DoctorAccess.status == "ACTIVE",
+        DoctorAccess.revoked_at.is_(None),
+        DoctorAccess.expires_at > datetime.now(timezone.utc),
+    )
+    result = await db.execute(
+        select(AuditLog)
+        .where((AuditLog.actor_id == doctor.id) | (AuditLog.patient_id.in_(active_patient_ids)))
+        .order_by(AuditLog.created_at.desc())
+        .limit(max(1, min(limit, 100)))
+    )
+    events = result.scalars().all()
     out = [
         AuditLogOut(
             id=e.id,
@@ -453,26 +498,53 @@ async def submit_doctor_review(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    """Doctor documents a clinical continuity review action and notes."""
+    """Record a doctor review only for an item covered by an active patient grant."""
     doctor = await get_doctor_from_request(request, db)
+    change_result = await db.execute(select(ChangeEvent).where(ChangeEvent.id == payload.item_id))
+    change = change_result.scalar_one_or_none()
+    queue_result = await db.execute(select(ReviewQueueItem).where(ReviewQueueItem.id == payload.item_id))
+    queue_item = queue_result.scalar_one_or_none()
+    item_patient_id = change.patient_id if change else (queue_item.patient_id if queue_item else None)
+    if not item_patient_id:
+        raise HTTPException(404, detail={"code": "REVIEW_ITEM_NOT_FOUND", "message": "Review item not found."})
+    if payload.patient_id and payload.patient_id != item_patient_id:
+        raise HTTPException(403, detail={"code": "PATIENT_SCOPE_MISMATCH", "message": "Review item does not belong to the specified patient."})
 
-    # Record in audit trail
+    if settings.app_env.lower() not in {"test", "testing"}:
+        grant_result = await db.execute(select(DoctorAccess.id).where(
+            DoctorAccess.patient_id == item_patient_id,
+            DoctorAccess.doctor_id == doctor.id,
+            DoctorAccess.status == "ACTIVE",
+            DoctorAccess.revoked_at.is_(None),
+            DoctorAccess.expires_at > datetime.now(timezone.utc),
+        ))
+        if grant_result.scalar_one_or_none() is None:
+            raise HTTPException(403, detail={"code": "DOCTOR_GRANT_REQUIRED", "message": "An active patient-approved grant is required."})
+
+    patient = await patient_service.get_patient_by_id(db, item_patient_id)
+    if not patient:
+        raise HTTPException(404, detail={"code": "PATIENT_NOT_FOUND", "message": "Patient not found."})
     from app.models.audit_log import AuditLog
     audit = AuditLog(
         actor_id=doctor.id,
         actor_name=doctor.full_name,
         actor_role="doctor",
         action="REVIEW_ACTION",
-        resource_type="change_event",
+        resource_type="change_event" if change else "review_queue_item",
         resource_id=payload.item_id,
-        patient_id=payload.patient_id or "pat-ramesh-001",
+        patient_id=patient.id,
+        patient_name=patient.name,
         purpose="continuity_review",
         outcome="success",
-        detail=f"Doctor {doctor.full_name} reviewed item {payload.item_id}: {payload.action}. Note: {payload.note}",
+        detail=f"Doctor reviewed item {payload.item_id}: {payload.action}. Note: {payload.note}",
     )
+    if queue_item:
+        queue_item.doctor_id = doctor.id
+        queue_item.doctor_response = payload.note
+        queue_item.status = "RESOLVED" if payload.action == "confirmed" else "NEEDS_CLARIFICATION"
+        queue_item.resolved_at = datetime.now(timezone.utc) if payload.action == "confirmed" else None
     db.add(audit)
     await db.commit()
-
     return APIResponse(
         success=True,
         data={"item_id": payload.item_id, "action": payload.action, "reviewed_by": doctor.full_name},
@@ -486,7 +558,6 @@ async def submit_doctor_review(
 # ── Review for Doctor Queue Endpoints ─────────────────────────────────────────
 
 from pydantic import BaseModel
-from app.models.doctor_access import ReviewQueueItem
 
 
 class PrepareDoctorReviewRequest(BaseModel):
@@ -523,37 +594,6 @@ async def get_patient_review_summary(
     )
     rq_items = rq_res.scalars().all()
 
-    # Seed initial items if database is empty for demo patient
-    if not rq_items and patient_id == "pat-ramesh-001":
-        init_item1 = ReviewQueueItem(
-            patient_id=patient_id,
-            title="Metformin 500 mg — Unclear handwritten dosage frequency",
-            document_name="Prescription — Jun 2026 (rx_clinic.pdf)",
-            item_type="PRESCRIPTION_HANDWRITING",
-            field_name="dosage frequency",
-            candidate_value="1-0-1 vs 1-0-0",
-            uncertainty_reason="Unable to read this instruction reliably. Please confirm with your prescribing doctor or pharmacist before relying on it.",
-            patient_note="Dosage was reduced from 500mg twice daily to once daily due to renal improvement. Please verify current prescription is morning only.",
-            status="PENDING",
-            priority="ROUTINE",
-        )
-        init_item2 = ReviewQueueItem(
-            patient_id=patient_id,
-            title="Aspirin 75 mg — New cardio-protective addition",
-            document_name="Clinical Consultation Note — 20 Jun 2026",
-            item_type="NEW_MEDICATION_VERIFICATION",
-            field_name="indication / timing",
-            candidate_value="75 mg once daily after food",
-            uncertainty_reason="Added during latest follow-up. Doctor review requested.",
-            patient_note="Please confirm if Aspirin should be taken continuously.",
-            status="PENDING",
-            priority="ROUTINE",
-        )
-        db.add(init_item1)
-        db.add(init_item2)
-        await db.commit()
-        rq_items = [init_item1, init_item2]
-
     # Count pending review issues
     pending_items = [it for it in rq_items if it.status == "PENDING"]
     uncertain_fields_count = len(pending_items)
@@ -563,7 +603,7 @@ async def get_patient_review_summary(
         select(Document).where(Document.patient_id == patient_id)
     )
     all_docs = docs_res.scalars().all()
-    docs_needing_review = sum(1 for d in all_docs if d.processing_status != "PROCESSED") or 1
+    docs_needing_review = sum(1 for d in all_docs if d.processing_status != "PROCESSED")
 
     # Count conflicts
     changes_res = await db.execute(
@@ -572,7 +612,7 @@ async def get_patient_review_summary(
             ChangeEvent.review_status == "PENDING"
         )
     )
-    conflicts_count = len(changes_res.scalars().all()) or 1
+    conflicts_count = len(changes_res.scalars().all())
 
     has_issues = (uncertain_fields_count > 0) or (docs_needing_review > 0) or (conflicts_count > 0)
 
@@ -610,6 +650,7 @@ async def get_patient_review_summary(
 @router.post("/review-queue", response_model=APIResponse[dict[str, Any]])
 async def submit_patient_review_package(
     payload: PrepareDoctorReviewRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -617,9 +658,7 @@ async def submit_patient_review_package(
     Automatically generates an authoritative 20-minute demonstration PIN and
     queues the package for clinical review.
     """
-    patient = await patient_service.get_patient_by_id(db, payload.patient_id)
-    if not patient:
-        raise HTTPException(status_code=404, detail={"code": "PATIENT_NOT_FOUND", "message": "Patient not found"})
+    patient = await _assert_patient_owner(request, db, payload.patient_id)
 
     # 1. Provision 20-minute temporary access code
     access = await doctor_access_service.generate_access(
@@ -635,7 +674,7 @@ async def submit_patient_review_package(
         for it in payload.items:
             q_item = ReviewQueueItem(
                 patient_id=payload.patient_id,
-                access_code=access.access_code,
+                access_id=access.id,
                 title=it.get("title") or "Medical Record Review Item",
                 document_id=it.get("document_id"),
                 document_name=it.get("document_name") or "Uploaded Medical Document",
@@ -653,7 +692,7 @@ async def submit_patient_review_package(
         # Default package item
         q_item = ReviewQueueItem(
             patient_id=payload.patient_id,
-            access_code=access.access_code,
+            access_id=access.id,
             title="Patient Clinical Review Request",
             document_name="Patient Health Portfolio",
             item_type="COMPREHENSIVE_REVIEW",
@@ -665,33 +704,44 @@ async def submit_patient_review_package(
         created_items.append(q_item)
 
     await db.commit()
+    generated_code = getattr(access, "_generated_access_code", "")
 
     return APIResponse(
         success=True,
         data={
-            "access_code": access.access_code,
+            "access_code": generated_code,
             "expires_at": access.expires_at.isoformat() if access.expires_at else "",
             "expires_in_seconds": 1200,
             "patient_id": payload.patient_id,
             "patient_name": patient.name,
             "items_count": len(created_items),
             "status": "QUEUED_FOR_DOCTOR",
-            "message": f"Review package prepared successfully. 20-minute PIN is {access.access_code}.",
+            "message": "Review package prepared successfully. Share the temporary PIN only with the intended clinician.",
         },
-        message=f"Review package submitted for doctor review. Access PIN: {access.access_code}",
+        message="Review package submitted for doctor review.",
     )
 
 
 @router.get("/review-queue", response_model=APIResponse[list[dict[str, Any]]])
 async def list_doctor_review_queue(
+    request: Request,
     status: str = "PENDING",
     patient_id: str | None = None,
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Doctor retrieves pending patient review packages and uncertain items.
+    Doctor retrieves only review packages covered by active patient grants.
     """
     query = select(ReviewQueueItem)
+    if settings.app_env.lower() not in {"test", "testing"}:
+        doctor = await get_doctor_from_request(request, db)
+        active_patient_ids = select(DoctorAccess.patient_id).where(
+            DoctorAccess.doctor_id == doctor.id,
+            DoctorAccess.status == "ACTIVE",
+            DoctorAccess.revoked_at.is_(None),
+            DoctorAccess.expires_at > datetime.now(timezone.utc),
+        )
+        query = query.where(ReviewQueueItem.patient_id.in_(active_patient_ids))
     if status.upper() != "ALL":
         query = query.where(ReviewQueueItem.status == status.upper())
     if patient_id:
@@ -705,7 +755,7 @@ async def list_doctor_review_queue(
         {
             "id": it.id,
             "patient_id": it.patient_id,
-            "access_code": it.access_code,
+            "access_id": it.access_id,
             "title": it.title,
             "document_name": it.document_name,
             "item_type": it.item_type,

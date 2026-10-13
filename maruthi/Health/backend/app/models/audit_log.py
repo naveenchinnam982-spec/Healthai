@@ -39,7 +39,7 @@ class AuditLog(Base):
     patient_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     resource_type: Mapped[str] = mapped_column(String(50), default="shared_access_grant")
     resource_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    purpose: Mapped[str | None] = mapped_column(String(100), default="DEMO_PURPOSE_ONLY")
+    purpose: Mapped[str | None] = mapped_column(String(100), default="PATIENT_APPROVED_CLINICAL_REVIEW")
     authorization_ref: Mapped[str | None] = mapped_column(String(50), nullable=True)
     outcome: Mapped[str] = mapped_column(String(20), default="success")  # success | denied | error
     detail: Mapped[str] = mapped_column(Text, nullable=False)

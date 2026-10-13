@@ -339,60 +339,42 @@ const DEMO_RAMESH_DATA = {
   },
 };
 
-// Global active app state
+// Global active app state. Real patient data is loaded only after Supabase Auth succeeds.
 let STATE = {
-  lang: (typeof localStorage !== 'undefined' && localStorage.getItem('hc_lang')) || 'en',
+  lang: (typeof localStorage !== "undefined" && localStorage.getItem("hc_lang")) || "en",
   backendConnected: false,
-  patient: JSON.parse(JSON.stringify(DEMO_RAMESH_DATA.patient)),
-  hospitals: JSON.parse(JSON.stringify(DEMO_RAMESH_DATA.hospitals)),
-  visits: JSON.parse(JSON.stringify(DEMO_RAMESH_DATA.visits)),
-  changes: JSON.parse(JSON.stringify(DEMO_RAMESH_DATA.changes)),
-  decisionMemory: JSON.parse(JSON.stringify(DEMO_RAMESH_DATA.decisionMemory)),
-  doctorAccess: {
-    code: '842-195',
-    expiresInSeconds: 580,
-    timerId: null,
-    status: 'ACTIVE',
-    pendingRequest: {
-      doctorName: 'Dr. Priya Sharma',
-      hospital: 'City Care Hospital',
-      scope: 'Medical history, medications, and recent lab reports',
-      requestedAt: 'Just now',
-    },
-  },
-  voiceCompanion: {
-    state: 'idle',
-    speechEnabled: true,
-    recognition: null,
-    currentTranscript: '',
-    currentDraft: '',
-    chatHistory: JSON.parse(JSON.stringify(DEMO_RAMESH_DATA.voiceCompanion.chatHistory)),
-    lastSpokenText: '',
-  },
-  addRecordFlow: {
-    step: 1,
-    selectedType: 'PRESCRIPTION',
-    selectedHospital: 'City Care Hospital, Chennai',
-    selectedVisit: 'visit-003',
-    uploadedFileName: '',
-    extractedData: null,
-  },
-  conflicts: JSON.parse(JSON.stringify(DEMO_RAMESH_DATA.conflicts)),
-  selectedComparisonMetric: 'hba1c',
-  historicalMetrics: JSON.parse(JSON.stringify(DEMO_RAMESH_DATA.historicalMetrics)),
+  demoPreview: false,
+  patient: { id: "", name: "", firstName: "Patient", age: null, dob: "", bloodGroup: "Not specified", uhid: "", phone: "", email: "" },
+  hospitals: [],
+  visits: [],
+  changes: [],
+  decisionMemory: null,
+  doctorAccess: { code: null, expiresInSeconds: 0, timerId: null, status: "NONE", pendingRequest: null },
+  voiceCompanion: { state: "idle", speechEnabled: true, recognition: null, currentTranscript: "", currentDraft: "", chatHistory: [], lastSpokenText: "" },
+  addRecordFlow: { step: 1, selectedType: "PRESCRIPTION", selectedHospital: "", selectedVisit: "", uploadedFileName: "", extractedData: null },
+  conflicts: [],
+  selectedComparisonMetric: "hba1c",
+  historicalMetrics: {},
 };
 
 function loadPatientData(patient = {}) {
-  const isRamesh = Boolean(
-    patient && (
-      patient.id === 'pat-ramesh-001' ||
-      patient.uhid === 'HC-2024-00847' ||
-      (patient.email && patient.email.toLowerCase().includes('ramesh')) ||
-      (patient.name && patient.name.toLowerCase().includes('ramesh'))
-    )
-  );
+  if (!patient || !patient.id) {
+    STATE.patient = { id: "", name: "", firstName: "Patient", age: null, dob: "", bloodGroup: "Not specified", uhid: "", phone: "", email: "" };
+    STATE.hospitals = [];
+    STATE.visits = [];
+    STATE.changes = [];
+    STATE.decisionMemory = null;
+    STATE.conflicts = [];
+    STATE.historicalMetrics = {};
+    STATE.voiceCompanion.chatHistory = [];
+    STATE.doctorAccess = { code: null, expiresInSeconds: 0, timerId: null, status: "NONE", pendingRequest: null };
+    STATE.demoPreview = false;
+    if (typeof window !== "undefined") window.PATIENT_ID = "";
+    return;
+  }
 
-  if (isRamesh) {
+  const isPreview = window.DEMO_PREVIEW === true && patient.id === DEMO_RAMESH_DATA.patient.id;
+  if (isPreview) {
     STATE.patient = JSON.parse(JSON.stringify(DEMO_RAMESH_DATA.patient));
     STATE.hospitals = JSON.parse(JSON.stringify(DEMO_RAMESH_DATA.hospitals));
     STATE.visits = JSON.parse(JSON.stringify(DEMO_RAMESH_DATA.visits));
@@ -401,64 +383,45 @@ function loadPatientData(patient = {}) {
     STATE.conflicts = JSON.parse(JSON.stringify(DEMO_RAMESH_DATA.conflicts));
     STATE.historicalMetrics = JSON.parse(JSON.stringify(DEMO_RAMESH_DATA.historicalMetrics));
     STATE.voiceCompanion.chatHistory = JSON.parse(JSON.stringify(DEMO_RAMESH_DATA.voiceCompanion.chatHistory));
+    STATE.doctorAccess = { code: null, expiresInSeconds: 0, timerId: null, status: "PREVIEW", pendingRequest: null };
+    STATE.demoPreview = true;
   } else {
-    const pId = patient?.id || ('pat-' + Math.random().toString(36).substring(2, 9));
-    const pUhid = patient?.uhid || ('HC-' + Math.random().toString(36).substring(2, 8).toUpperCase());
-    const pName = patient?.name || (patient?.email ? patient.email.split('@')[0].replace(/[._]/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) : 'New Patient');
-    const pFirst = pName.split(' ')[0] || 'Patient';
-
+    const name = patient.name || "Patient";
     STATE.patient = {
-      id: pId,
-      name: pName,
-      firstName: pFirst,
-      age: patient?.age || null,
-      dob: patient?.dob || '',
-      bloodGroup: patient?.blood_group || patient?.bloodGroup || 'Not specified',
-      uhid: pUhid,
-      phone: patient?.phone || '',
-      email: patient?.email || '',
+      id: patient.id,
+      name,
+      firstName: name.split(" ")[0] || "Patient",
+      age: patient.age || null,
+      dob: patient.date_of_birth || patient.dob || "",
+      bloodGroup: patient.blood_group || patient.bloodGroup || "Not specified",
+      uhid: patient.uhid || "",
+      phone: patient.phone || "",
+      email: patient.email || "",
     };
-
-    let storedRecords = null;
-    try {
-      const raw = localStorage.getItem('hc_records_' + pId);
-      if (raw) storedRecords = JSON.parse(raw);
-    } catch (e) {}
-
-    if (storedRecords && Array.isArray(storedRecords.visits) && storedRecords.visits.length > 0) {
-      STATE.visits = storedRecords.visits;
-      STATE.hospitals = storedRecords.hospitals || [];
-      STATE.changes = storedRecords.changes || [];
-      STATE.conflicts = storedRecords.conflicts || [];
-      STATE.decisionMemory = storedRecords.decisionMemory || null;
-      STATE.historicalMetrics = storedRecords.historicalMetrics || {};
-    } else {
-      STATE.visits = [];
-      STATE.hospitals = [];
-      STATE.changes = [];
-      STATE.conflicts = [];
-      STATE.decisionMemory = null;
-      STATE.historicalMetrics = {};
-    }
-
-    STATE.voiceCompanion.chatHistory = [
-      {
-        id: 'qa-welcome-' + Date.now(),
-        sender: 'companion',
-        questionNumber: 1,
-        text: `Hello ${pFirst}! Welcome to HealthContinuum AI. I'm Dr. Anya. Upload your medical reports or ask me any health questions.`,
-        timestamp: 'Just now',
-        source: null,
-        provider: 'Dr. Anya AI',
-      }
-    ];
+    // No localStorage or seeded-data fallback for authenticated patient records.
+    STATE.hospitals = [];
+    STATE.visits = [];
+    STATE.changes = [];
+    STATE.decisionMemory = null;
+    STATE.conflicts = [];
+    STATE.historicalMetrics = {};
+    STATE.voiceCompanion.chatHistory = [{
+      id: "qa-welcome-" + Date.now(),
+      sender: "companion",
+      questionNumber: 1,
+      text: `Hello ${STATE.patient.firstName}! Welcome to HealthContinuum AI. I'm Dr. Anya. Upload your medical reports or ask me about records in your account.`,
+      timestamp: "Just now",
+      source: null,
+      provider: "Dr. Anya AI",
+    }];
+    STATE.doctorAccess = { code: null, expiresInSeconds: 0, timerId: null, status: "NONE", pendingRequest: null };
+    STATE.demoPreview = false;
   }
 
-  if (typeof window !== 'undefined') {
+  STATE.addRecordFlow = { step: 1, selectedType: "PRESCRIPTION", selectedHospital: "", selectedVisit: "", uploadedFileName: "", extractedData: null };
+  if (typeof window !== "undefined") {
     window.PATIENT_ID = STATE.patient.id;
-    if (window.API && typeof window.API.setActivePatientId === 'function') {
-      window.API.setActivePatientId(STATE.patient.id);
-    }
+    if (window.API && typeof window.API.setActivePatientId === "function") window.API.setActivePatientId(STATE.patient.id);
   }
 }
 
@@ -731,94 +694,121 @@ function updateIosClock() {
 
 // ─── BACKEND SYNCHRONIZATION ───────────────────────────────────────────────
 async function syncWithBackend() {
+  if (window.DEMO_PREVIEW || STATE.demoPreview || !STATE.patient?.id) return false;
   try {
-    if (typeof window.checkBackend === 'function') {
-      STATE.backendConnected = await window.checkBackend();
+    const health = await window.API.health();
+    STATE.backendConnected = health?.success === true;
+    if (!STATE.backendConnected) {
+      console.warn("[HealthContinuum] API is unavailable; no synthetic patient records will be substituted.");
+      return false;
     }
-    if (!STATE.backendConnected && typeof window.API !== 'undefined') {
-      const h = await window.API.health();
-      STATE.backendConnected = h?.success === true;
+
+    const patientId = STATE.patient.id;
+    const [pRes, vRes, medRes, labRes, docRes, changeRes, memoryRes] = await Promise.all([
+      window.API.getPatient(patientId),
+      window.API.getVisits(patientId),
+      window.API.getMedications(patientId),
+      window.API.getLabs(patientId),
+      window.API.getDocuments(patientId),
+      window.API.getChanges(patientId),
+      window.API.getDecisionMemory(patientId),
+    ]);
+
+    if (pRes?.success && pRes.data) {
+      const p = pRes.data;
+      STATE.patient = {
+        ...STATE.patient,
+        id: p.id,
+        name: p.name || STATE.patient.name,
+        firstName: (p.name || STATE.patient.name || "Patient").split(" ")[0],
+        uhid: p.uhid || "",
+        bloodGroup: p.blood_group || "Not specified",
+        dob: p.date_of_birth || "",
+        phone: p.phone || "",
+        email: p.email || "",
+      };
     }
 
-    const patientId = STATE.patient?.id || (window.API && window.API.getActivePatientId && window.API.getActivePatientId());
-    const isRamesh = patientId === 'pat-ramesh-001';
+    const visits = vRes?.success && Array.isArray(vRes.data) ? vRes.data : [];
+    const medications = medRes?.success && Array.isArray(medRes.data) ? medRes.data : [];
+    const labs = labRes?.success && Array.isArray(labRes.data) ? labRes.data : [];
+    const documents = docRes?.success && Array.isArray(docRes.data) ? docRes.data : [];
+    const changes = changeRes?.success && Array.isArray(changeRes.data) ? changeRes.data : [];
 
-    if (STATE.backendConnected && window.API && patientId) {
-      console.info('[HealthContinuum] Loading real records from backend for patient:', patientId);
-      // 1. Patient info
-      const pRes = await window.API.getPatient(patientId);
-      if (pRes?.success && pRes.data) {
-        STATE.patient.name = pRes.data.name || STATE.patient.name;
-        STATE.patient.firstName = STATE.patient.name.split(' ')[0];
-        STATE.patient.uhid = pRes.data.uhid || STATE.patient.uhid;
-        if (pRes.data.blood_group) STATE.patient.bloodGroup = pRes.data.blood_group;
-        if (pRes.data.email) STATE.patient.email = pRes.data.email;
-        if (pRes.data.phone) STATE.patient.phone = pRes.data.phone;
-      }
+    STATE.visits = visits.map(v => ({
+      id: v.id,
+      date: formatDateStr(v.visit_date),
+      dateRaw: v.visit_date,
+      hospitalName: v.hospital_name || "Healthcare provider not specified",
+      doctorName: v.doctor_name || "Clinician not specified",
+      type: v.visit_type || "Consultation",
+      summary: v.summary || "",
+      medications: medications.filter(m => m.visit_id === v.id).map(m => ({
+        id: m.id, name: m.name, dose: m.dosage || "", freq: m.frequency || "",
+        status: m.status || "CURRENT", route: m.route || "",
+      })),
+      labs: labs.filter(l => l.visit_id === v.id).map(l => ({
+        id: l.id, test: l.test_name, value: l.value, unit: l.unit || "",
+        range: l.reference_range || "", date: l.test_date || "", status: "Recorded",
+      })),
+      documents: documents.filter(d => d.visit_id === v.id).map(d => ({
+        id: d.id, name: d.file_name || "Medical document", type: d.document_type,
+        file: d.file_url || "", date: formatDateStr((d.uploaded_at || "").slice(0, 10)),
+      })),
+    }));
 
-      // 2. Visits
-      const vRes = await window.API.getVisits(patientId);
-      if (vRes?.success && Array.isArray(vRes.data)) {
-        if (vRes.data.length > 0) {
-          // Map backend visits
-          STATE.visits = vRes.data.map(v => ({
-            id: v.id,
-            date: formatDateStr(v.visit_date),
-            dateRaw: v.visit_date,
-            hospitalName: v.hospital_name || (isRamesh ? 'City Care Hospital, Chennai' : 'Primary Care Center'),
-            doctorName: v.doctor_name || (isRamesh ? 'Dr. Priya Sharma' : 'Attending Physician'),
-            type: v.visit_type || 'Consultation',
-            summary: v.summary || '',
-            medications: Array.isArray(v.medications) ? v.medications : (isRamesh && v.id === 'visit-003' ? [
-              { name: 'Metformin', dose: '500 mg', freq: 'Once daily (morning)', status: 'CURRENT' },
-              { name: 'Aspirin', dose: '75 mg', freq: 'Once daily', status: 'CURRENT' },
-            ] : (isRamesh ? [
-              { name: 'Metformin', dose: '500 mg', freq: 'Twice daily', status: 'HISTORICAL' },
-            ] : [])),
-            labs: Array.isArray(v.labs) ? v.labs : (isRamesh && v.id === 'visit-003' ? [
-              { test: 'HbA1c', value: '6.5', unit: '%', range: '< 7.0', status: 'optimal' },
-              { test: 'eGFR', value: '82', unit: 'mL/min/1.73m²', range: '> 60', status: 'optimal' },
-            ] : (isRamesh && v.id === 'visit-002' ? [
-              { test: 'HbA1c', value: '7.1', unit: '%', range: '< 7.0', status: 'improving' },
-              { test: 'eGFR', value: '74', unit: 'mL/min/1.73m²', range: '> 60', status: 'optimal' },
-            ] : (isRamesh ? [
-              { test: 'HbA1c', value: '7.8', unit: '%', range: '< 7.0', status: 'elevated' },
-              { test: 'eGFR', value: '68', unit: 'mL/min/1.73m²', range: '> 60', status: 'optimal' },
-            ] : []))),
-            documents: Array.isArray(v.documents) && v.documents.length > 0 ? v.documents : [
-              { id: `doc-${v.id}`, name: `${v.visit_type || 'Clinical'} Record`, type: 'DOCTOR_NOTE', file: `record_${v.visit_date}.pdf`, date: formatDateStr(v.visit_date) }
-            ],
-          }));
-        } else if (!isRamesh) {
-          // New person with 0 visits in database: ensure clean visits list unless local cache has them
-          let localRec = null;
-          try { localRec = JSON.parse(localStorage.getItem('hc_records_' + patientId)); } catch (e) {}
-          if (localRec && Array.isArray(localRec.visits)) {
-            STATE.visits = localRec.visits;
-          } else {
-            STATE.visits = [];
-          }
-        }
-      }
+    STATE.hospitals = [...new Set(visits.map(v => v.hospital_name).filter(Boolean))].map((name, i) => ({
+      id: "hospital-" + i, name, shortName: name, visitCount: visits.filter(v => v.hospital_name === name).length,
+      recordCount: documents.length, doctor: visits.find(v => v.hospital_name === name)?.doctor_name || "",
+    }));
 
-      // 3. Decision Memory
-      const dmRes = await window.API.getDecisionMemory(patientId);
-      if (dmRes?.success && Array.isArray(dmRes.data) && dmRes.data[0]) {
-        const item = dmRes.data[0];
-        STATE.decisionMemory = {
-          finding: item.finding || (isRamesh ? STATE.decisionMemory.finding : ''),
-          decision: item.decision || (isRamesh ? STATE.decisionMemory.decision : ''),
-          reason: item.reason || (isRamesh ? STATE.decisionMemory.reason : ''),
-          evidence: item.evidence || (isRamesh ? STATE.decisionMemory.evidence : ''),
-          followUp: item.follow_up || (isRamesh ? STATE.decisionMemory.followUp : ''),
-          status: 'Verified from available records',
-        };
-      } else if (!isRamesh) {
-        STATE.decisionMemory = null;
-      }
+    STATE.changes = changes.map(ch => ({
+      id: ch.id,
+      title: ch.field_name || ch.change_type || "Clinical record change",
+      category: ch.change_type || "Record change",
+      previous: ch.previous_value || "Not recorded",
+      current: ch.current_value || "Not recorded",
+      date: formatDateStr((ch.created_at || "").slice(0, 10)),
+      hospital: "",
+      doctor: "",
+      reason: ch.reason_status === "EXPLAINED" ? "Reason documented in the clinical record." : "Reason requires clinical review.",
+      sourceDoc: "",
+      status: ch.review_status || "PENDING",
+      badgeText: ch.reason_status || "Needs review",
+      badgeType: ch.reason_status === "EXPLAINED" ? "verified" : "review",
+    }));
+
+    const memory = memoryRes?.success && Array.isArray(memoryRes.data) ? memoryRes.data[0] : null;
+    STATE.decisionMemory = memory ? {
+      finding: memory.finding || "",
+      decision: memory.decision || "",
+      reason: memory.reason || "",
+      evidence: memory.evidence || "",
+      followUp: memory.follow_up || "",
+      status: memory.verification_status || "Pending verification",
+    } : null;
+
+    const metricDefs = [
+      { key: "hba1c", names: ["hba1c", "glycated hemoglobin"], name: "HbA1c", unit: "%" },
+      { key: "egfr", names: ["egfr", "glomerular filtration"], name: "eGFR", unit: "mL/min/1.73m²" },
+      { key: "creatinine", names: ["creatinine"], name: "Serum Creatinine", unit: "mg/dL" },
+    ];
+    const historical = {};
+    for (const def of metricDefs) {
+      const points = labs.filter(l => def.names.some(n => String(l.test_name || "").toLowerCase().includes(n)))
+        .map(l => ({ date: formatDateStr(l.test_date || (l.created_at || "").slice(0, 10)), value: Number.parseFloat(l.value), status: "Recorded", docId: l.source_document_id || null, docName: l.test_name }))
+        .filter(p => Number.isFinite(p.value))
+        .sort((a, b) => String(a.date).localeCompare(String(b.date)));
+      if (points.length) historical[def.key] = { name: def.name, unit: def.unit, target: "", standardized: true, description: "Values transcribed from your uploaded records.", points };
     }
+    STATE.historicalMetrics = historical;
+    STATE.conflicts = [];
+    STATE.backendConnected = true;
+    return true;
   } catch (err) {
-    console.warn('[HealthContinuum] Backend sync error, continuing with local model:', err);
+    STATE.backendConnected = false;
+    console.warn("[HealthContinuum] Backend sync failed; keeping the authenticated profile without inventing medical records.", err);
+    return false;
   }
 }
 
@@ -1080,7 +1070,7 @@ function renderLogin() {
   if (!container) return;
 
   const isConnected = STATE.backendConnected;
-  const patientUhid = STATE.patient?.uhid || 'HC-2024-00847';
+  const patientUhid = '';
 
   let tabBodyHtml = '';
 
@@ -1090,20 +1080,20 @@ function renderLogin() {
         <div id="auth-alert" style="display:none;"></div>
 
         <div class="input-group">
-          <label class="input-label" for="login-identifier">Patient UHID, Email, or Mobile</label>
+          <label class="input-label" for="login-identifier">Email Address or Phone Number</label>
           <input class="input-field" type="text" id="login-identifier" required 
-                 placeholder="e.g. HC-2024-00847 or ramesh.kumar@synthetic.example" 
+                 placeholder="patient@example.com or +91 98765 43210" 
                  value="${patientUhid}" />
         </div>
 
         <div class="input-group">
           <div style="display:flex;justify-content:space-between;align-items:center;">
             <label class="input-label" for="login-password">Passcode</label>
-            <span style="font-size:12px;color:var(--blue);cursor:pointer;font-weight:600;" onclick="fillDemoCredentials()">Use demo (password123)</span>
+            
           </div>
           <div style="position:relative;display:flex;align-items:center;">
             <input class="input-field" type="password" id="login-password" required 
-                   placeholder="Enter your passcode" value="password123" style="padding-right:44px;" />
+                   placeholder="Enter your passcode" style="padding-right:44px;" />
             <button type="button" class="btn-icon" id="btn-toggle-pwd" onclick="togglePasswordVisibility('login-password', this)" 
                     style="position:absolute;right:8px;color:var(--text-tertiary);padding:6px;font-size:14px;" title="Toggle passcode">
               👁️
@@ -1143,7 +1133,7 @@ function renderLogin() {
         <div id="auth-alert" style="display:none;"></div>
 
         <p style="font-size:13px;color:var(--text-secondary);margin:0 0 4px;">
-          Instantly test HealthContinuum AI with pre-configured synthetic longitudinal data:
+          Explore the sample patient journey using synthetic data. Preview mode is read-only and does not sign in to an account:
         </p>
 
         <div class="quick-profile-card" onclick="handleQuickDemoLogin()" style="border-left:4px solid var(--blue);">
@@ -1170,7 +1160,7 @@ function renderLogin() {
         </div>
 
         <button type="button" class="btn btn-primary btn-full" id="btn-demo-login" onclick="handleQuickDemoLogin()" style="height:48px;font-size:14.5px;font-weight:600;margin-top:4px;">
-          <span>Explore as Ramesh Kumar</span>
+          <span>Explore synthetic preview (read-only)</span>
         </button>
 
         <div style="padding:12px;background:#f8fafc;border-radius:12px;border:1px dashed #cbd5e1;font-size:12px;color:var(--text-secondary);line-height:1.5;">
@@ -1190,7 +1180,7 @@ function renderLogin() {
 
         <div class="input-group">
           <label class="input-label" for="reg-email">Email Address</label>
-          <input class="input-field" type="email" id="reg-email" placeholder="patient@example.com" />
+          <input class="input-field" type="email" id="reg-email" placeholder="patient@example.com" required />
         </div>
 
         <div class="input-group">
@@ -1200,7 +1190,7 @@ function renderLogin() {
 
         <div class="input-group">
           <label class="input-label" for="reg-password">Create Passcode</label>
-          <input class="input-field" type="password" id="reg-password" required placeholder="Choose a passcode" value="password123" />
+          <input class="input-field" type="password" id="reg-password" required placeholder="At least 8 characters" />
         </div>
 
         <button type="submit" class="btn btn-primary btn-full" id="btn-reg-submit" style="height:50px;font-size:15px;font-weight:600;margin-top:4px;">
@@ -1224,9 +1214,9 @@ function renderLogin() {
           </div>
         </div>
 
-        <div class="backend-status-pill" id="backend-status-indicator" title="Connected to FastAPI & Cloud Firestore">
+        <div class="backend-status-pill" id="backend-status-indicator" title="Supabase Auth and patient API">
           <div class="pulse-dot"></div>
-          <span style="font-size:11px;">${isConnected ? 'Backend Live' : 'Backend Ready'}</span>
+          <span style="font-size:11px;">${isConnected ? 'Backend Live' : 'Secure sign-in'}</span>
         </div>
       </div>
 
@@ -1262,7 +1252,7 @@ function renderLogin() {
       <div style="margin-top:24px;padding:12px 14px;background:rgba(37,99,235,0.05);border-radius:14px;border:1px solid rgba(37,99,235,0.12);display:flex;gap:10px;align-items:flex-start;">
         <div style="color:var(--blue);margin-top:1px;">${getIcon('shield', 'width:18px;height:18px;')}</div>
         <div style="font-size:11.5px;color:var(--text-secondary);line-height:1.45;">
-          <strong style="color:var(--text-primary);">HIPAA & Privacy Assured:</strong> All records are end-to-end encrypted. Doctors receive temporary read-only access strictly upon your approval.
+          <strong style="color:var(--text-primary);">Privacy first:</strong> Sign-in is required for personal records. Clinician access is limited by patient-approved sharing permissions.
         </div>
       </div>
     </div>
@@ -1311,10 +1301,7 @@ function togglePasswordVisibility(fieldId, btnEl) {
 }
 
 function fillDemoCredentials() {
-  const idEl = document.getElementById('login-identifier');
-  const pwdEl = document.getElementById('login-password');
-  if (idEl) idEl.value = 'HC-2024-00847';
-  if (pwdEl) pwdEl.value = 'password123';
+  setAuthTab("demo");
 }
 
 async function handleLoginSubmit() {
@@ -1346,37 +1333,29 @@ async function handleLoginSubmit() {
 
 async function handleGoogleLogin() {
   const btn = document.getElementById('btn-google-auth');
-  showAuthError('Google sign-in is not configured yet. Please use email and password.');
-  setAuthLoading(btn, false, 'Continue with Google');
+  setAuthLoading(btn, true, 'Connecting to Google...');
+  const result = await window.API.googleAuth();
+  if (!result?.success) {
+    showAuthError(result?.error?.message || 'Google sign-in could not start. Check Supabase OAuth settings.');
+    setAuthLoading(btn, false, 'Continue with Google');
+  }
 }
 
 async function handleQuickDemoLogin() {
-  const btn = document.getElementById('btn-demo-login') || document.getElementById('btn-login-submit');
-  setAuthLoading(btn, true, 'Signing in as Ramesh...');
-
-  try {
-    const res = await window.API.login('HC-2024-00847', 'password123', true);
-    if (res?.success && res.data) {
-      await handleAuthSuccess(res.data, true);
-    } else {
-      await handleAuthSuccess({
-        access_token: 'demo-token-001',
-        patient: { id: 'pat-ramesh-001', name: 'Ramesh Kumar', uhid: 'HC-2024-00847', email: 'ramesh.kumar@synthetic.example', phone: '+91 98765 43210' },
-      }, true);
-    }
-  } catch (err) {
-    await handleAuthSuccess({
-      access_token: 'demo-token-001',
-      patient: { id: 'pat-ramesh-001', name: 'Ramesh Kumar', uhid: 'HC-2024-00847', email: 'ramesh.kumar@synthetic.example', phone: '+91 98765 43210' },
-    }, true);
-  }
+  // Synthetic preview only: never create a fake token or authenticated session.
+  window.DEMO_PREVIEW = true;
+  STATE.demoPreview = true;
+  loadPatientData(DEMO_RAMESH_DATA.patient);
+  STATE.backendConnected = false;
+  showAuthSuccess('Read-only sample preview opened. No real patient account is signed in.');
+  navigate('home');
 }
 
 async function handleRegisterSubmit() {
   const name = document.getElementById('reg-name')?.value.trim();
   const email = document.getElementById('reg-email')?.value.trim();
   const phone = document.getElementById('reg-phone')?.value.trim();
-  const password = document.getElementById('reg-password')?.value || 'password123';
+  const password = document.getElementById('reg-password')?.value || '';
   const btn = document.getElementById('btn-reg-submit');
 
   if (!name) {
@@ -1401,39 +1380,24 @@ async function handleRegisterSubmit() {
 }
 
 async function handleAuthSuccess(authData, remember) {
-  if (authData.patient) {
-    loadPatientData(authData.patient);
-  }
-  if (authData.access_token) {
-    window.AUTH_TOKEN = authData.access_token;
-  }
-  if (remember) {
-    try {
-      localStorage.setItem('hc_auth_user', JSON.stringify({
-        token: authData.access_token,
-        patient: STATE.patient,
-        timestamp: Date.now(),
-      }));
-    } catch (e) {}
+  window.DEMO_PREVIEW = false;
+  STATE.demoPreview = false;
+  if (authData?.patient) loadPatientData(authData.patient);
+  else {
+    showAuthError('Your account profile could not be loaded. Please sign in again.');
+    return;
   }
 
-  showAuthSuccess(`Welcome, ${STATE.patient.firstName}! Loading dashboard...`);
-
-  // Refresh real backend data
+  showAuthSuccess(`Welcome, ${STATE.patient.firstName}! Loading your records...`);
   await syncWithBackend();
-
-  setTimeout(() => {
-    navigate('home');
-  }, 400);
+  setTimeout(() => navigate('home'), 250);
 }
 
 async function handleLogout() {
-  try {
-    localStorage.removeItem('hc_auth_user');
-    localStorage.removeItem('hc_patient_id');
-  } catch (e) {}
-  try { localStorage.removeItem('hc_access_token'); } catch (e) {}
-loadPatientData({ id: '', name: '', email: '', uhid: '' });
+  try { await window.API.logout(); } catch (error) { console.warn('[Auth] Sign-out error:', error); }
+  window.DEMO_PREVIEW = false;
+  window.AUTH_TOKEN = null;
+  loadPatientData({});
   closeProfileDrawer();
   navigate('login');
 }
@@ -1448,6 +1412,7 @@ function renderHome() {
   const userInitials = (STATE.patient?.name || 'Patient').split(' ').filter(Boolean).map(n => n[0]).join('').substring(0, 2).toUpperCase() || 'PT';
 
   container.innerHTML = `
+    ${STATE.demoPreview ? '<div role="status" style="padding:10px 14px;margin:10px 0;background:#fff7ed;border:1px solid #fed7aa;border-radius:12px;color:#9a3412;font-size:12px;font-weight:700;">DEMO PREVIEW · Synthetic data only · Read-only · Not a signed-in patient account</div>' : ''}
     <!-- 1. HEADER: BRAND LOGO + TITLE + LANGUAGE SWITCHER + AVATAR + NOTIFICATION BELL -->
     <header class="hc-home-header">
       <div class="hc-brand-left">
@@ -2393,7 +2358,8 @@ async function handleSendCompanionMessage(questionText) {
     answerText = localMatch.answer;
     sourceObj = localMatch.source || sourceObj;
     citationsList = sourceObj ? [sourceObj] : [];
-    providerNoteStr = 'Grounded directly in patient database records';
+    providerNoteStr = (window.DEMO_PREVIEW || STATE.demoPreview) ? 'Synthetic sample data for preview only; not a real patient record.' : 'Could not verify this answer against your saved records.';
+    if (window.DEMO_PREVIEW || STATE.demoPreview) providerStr = 'synthetic_demo_preview';
     factsList = (localMatch.facts && localMatch.facts.length > 0) ? localMatch.facts : factsList;
   }
 
@@ -2427,6 +2393,13 @@ async function handleSendCompanionMessage(questionText) {
 
 // ─── LOCAL CLINICAL GROUNDING MATCHER (ZERO FABRICATION) ────────────────────
 function matchRecordLocally(query) {
+  if (!(window.DEMO_PREVIEW || STATE.demoPreview)) {
+    return {
+      answer: "I could not verify an answer against your saved medical records because the backend did not return one. Please try again when your connection is available.",
+      source: null,
+      facts: [],
+    };
+  }
   const q = (query || '').toLowerCase().trim();
   const isTe = /[\u0C00-\u0C7F]/.test(query) || STATE.lang === 'te';
 
@@ -2790,39 +2763,26 @@ function openNotificationsDrawer() {
   const content = document.getElementById('notifications-drawer-content');
   if (!modal || !content) return;
 
+  const items = (STATE.demoPreview ? DEMO_RAMESH_DATA.changes : STATE.changes)
+    .filter(change => ["REVIEW", "PENDING", "INCOMPLETE", "NEEDS_REVIEW"].includes(String(change.status || "").toUpperCase()));
   content.innerHTML = `
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;">
       <h2 style="font-size:18px;font-weight:700;margin:0;">Needs Attention</h2>
       <button class="btn-icon" onclick="closeNotificationsDrawer()">${getIcon('close', 'width:18px;height:18px;')}</button>
     </div>
-
-    <div style="display:flex;flex-direction:column;gap:12px;">
-      <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:var(--r-lg);padding:14px;">
-        <div style="font-size:13px;font-weight:700;color:#92400e;">1. Aspirin 75mg Review Pending</div>
-        <div style="font-size:12px;color:#78350f;margin-top:4px;">New prescription from 20 Jun 2026. Needs review with Dr. Sharma.</div>
-        <button class="btn btn-sm" style="background:#d97706;color:white;margin-top:10px;font-size:11px;" onclick="closeNotificationsDrawer(); openChangeDetail('chg-002');">
-          Review with Doctor
-        </button>
+    ${items.length ? `
+      <div style="display:flex;flex-direction:column;gap:12px;">
+        ${items.map((item, index) => `
+          <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:var(--r-lg);padding:14px;">
+            <div style="font-size:13px;font-weight:700;color:#92400e;">${index + 1}. ${escapeHtml(item.title || item.field_name || 'Record needs review')}</div>
+            <div style="font-size:12px;color:#78350f;margin-top:4px;">${escapeHtml(item.reason || item.badgeText || 'Please review this record with your clinician.')}</div>
+            ${item.id ? `<button class="btn btn-sm" style="background:#d97706;color:white;margin-top:10px;font-size:11px;" onclick="closeNotificationsDrawer(); openChangeDetail('${escapeHtml(item.id)}');">Review record</button>` : ''}
+          </div>
+        `).join('')}
       </div>
-
-      <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:var(--r-lg);padding:14px;">
-        <div style="font-size:13px;font-weight:700;color:#991b1b;">2. Missing Lumbar Spine MRI</div>
-        <div style="font-size:12px;color:#7f1d1d;margin-top:4px;">Referenced in consultation notes, but image/report is missing.</div>
-        <button class="btn btn-sm" style="background:#dc2626;color:white;margin-top:10px;font-size:11px;" onclick="closeNotificationsDrawer(); openAddRecordFlow('SCAN');">
-          Upload Scan Report
-        </button>
-      </div>
-
-      <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:var(--r-lg);padding:14px;">
-        <div style="font-size:13px;font-weight:700;color:#166534;">3. September 2026 Follow-up</div>
-        <div style="font-size:12px;color:#14532d;margin-top:4px;">Repeat HbA1c and renal profile to check kidney safety on Metformin.</div>
-        <button class="btn btn-sm" style="background:#16a34a;color:white;margin-top:10px;font-size:11px;" onclick="closeNotificationsDrawer(); navigate('decision');">
-          View Decision Memory
-        </button>
-      </div>
-    </div>
+    ` : '<div style="padding:24px 12px;text-align:center;color:var(--text-secondary);">No records currently require attention.</div>'}
+    ${STATE.demoPreview ? '<p style="font-size:11px;color:#9a3412;margin-top:16px;">Synthetic preview data only.</p>' : ''}
   `;
-
   modal.classList.add('open');
 }
 
@@ -2835,44 +2795,40 @@ function openHospitalModal() {
   const modal = document.getElementById('hospital-modal');
   const sheet = document.getElementById('hospital-sheet');
   if (!modal || !sheet) return;
-
+  const hospitals = STATE.hospitals || [];
+  const visits = STATE.visits || [];
+  const documents = visits.flatMap(v => v.documents || []);
   sheet.innerHTML = `
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
       <h2 style="font-size:19px;font-weight:700;color:var(--text-primary);margin:0;">Hospital Overview</h2>
       <button class="btn-icon" onclick="closeHospitalModal()">${getIcon('close', 'width:18px;height:18px;')}</button>
     </div>
-
-    <div style="display:flex;align-items:center;gap:12px;padding:14px;background:var(--blue-light);border-radius:var(--r-xl);margin-bottom:16px;">
-      <div style="font-size:28px;">🏥</div>
-      <div>
-        <div style="font-size:16px;font-weight:700;color:var(--text-primary);">City Care Hospital, Chennai</div>
-        <div style="font-size:12px;color:var(--text-secondary);">3 visits recorded · 5 connected documents</div>
+    ${hospitals.length ? hospitals.map(hospital => `
+      <div style="display:flex;align-items:center;gap:12px;padding:14px;background:var(--blue-light);border-radius:var(--r-xl);margin-bottom:16px;">
+        <div style="font-size:28px;">🏥</div>
+        <div>
+          <div style="font-size:16px;font-weight:700;color:var(--text-primary);">${escapeHtml(hospital.name)}</div>
+          <div style="font-size:12px;color:var(--text-secondary);">${hospital.visitCount || visits.filter(v => v.hospitalName === hospital.name).length} visits recorded · ${hospital.recordCount || documents.length} connected documents</div>
+        </div>
       </div>
-    </div>
-
+    `).join('') : '<div style="padding:20px;text-align:center;color:var(--text-secondary);">No hospital visits have been recorded in your account yet.</div>'}
     <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:20px;">
       <div style="font-size:12px;font-weight:700;color:var(--text-tertiary);text-transform:uppercase;">Visits on Record</div>
-      ${STATE.visits.map(v => `
+      ${visits.length ? visits.map(v => `
         <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:var(--r-md);padding:12px 14px;">
           <div style="display:flex;justify-content:space-between;font-size:13px;font-weight:600;">
-            <span>${v.date}</span>
-            <span style="color:var(--blue);">${v.doctorName}</span>
+            <span>${escapeHtml(v.date || 'Date not recorded')}</span>
+            <span style="color:var(--blue);">${escapeHtml(v.doctorName || 'Clinician not recorded')}</span>
           </div>
-          <div style="font-size:12px;color:var(--text-secondary);margin-top:4px;">${v.summary}</div>
+          <div style="font-size:12px;color:var(--text-secondary);margin-top:4px;">${escapeHtml(v.summary || v.type || 'Visit details not recorded')}</div>
         </div>
-      `).join('')}
+      `).join('') : '<div style="font-size:12px;color:var(--text-secondary);">No visits found.</div>'}
     </div>
-
     <div style="display:flex;gap:10px;">
-      <button class="btn btn-secondary btn-full" onclick="closeHospitalModal(); navigate('records');">
-        View All Records
-      </button>
-      <button class="btn btn-primary btn-full" onclick="closeHospitalModal(); openAddRecordFlow();">
-        Add Record
-      </button>
+      <button class="btn btn-secondary btn-full" onclick="closeHospitalModal(); navigate('records');">View Medical Records</button>
     </div>
+    ${STATE.demoPreview ? '<p style="font-size:11px;color:#9a3412;margin-top:16px;">Synthetic preview data only.</p>' : ''}
   `;
-
   modal.classList.add('open');
 }
 
@@ -3609,13 +3565,20 @@ function handleFileSelected(event) {
 }
 
 function handleSimulatedPhoto() {
-  // Create an explicit mock prescription for camera test without pretending it's an uploaded file
-  executeUploadPipeline('camera_capture_prescription.jpg');
+  alert("Camera capture is not connected yet. Please select an actual PDF or image file.");
 }
 
 async function executeUploadPipeline(fileOrName) {
-  const isFileObj = (fileOrName instanceof File || fileOrName instanceof Blob);
-  const fileName = isFileObj ? fileOrName.name : String(fileOrName);
+  const isFileObj = (typeof File !== "undefined" && fileOrName instanceof File) || (typeof Blob !== "undefined" && fileOrName instanceof Blob);
+  if (window.DEMO_PREVIEW || STATE.demoPreview) {
+    alert("Demo preview is read-only. Sign in to upload a medical document.");
+    return;
+  }
+  if (!isFileObj || !STATE.patient?.id) {
+    alert("Sign in and select a real PDF or image file before uploading.");
+    return;
+  }
+  const fileName = fileOrName.name || "medical-document";
 
   STATE.addRecordFlow.uploadedFile = isFileObj ? fileOrName : null;
   STATE.addRecordFlow.uploadedFileName = fileName;
@@ -3641,15 +3604,15 @@ async function executeUploadPipeline(fileOrName) {
         visit_id: STATE.addRecordFlow.selectedVisit || null,
         document_type: STATE.addRecordFlow.selectedType || null,
       };
-      uploadRes = await window.API.uploadDocument(STATE.patient?.id || 'pat-ramesh-001', payload);
+      uploadRes = await window.API.uploadDocument(STATE.patient.id, payload);
     }
 
     if (uploadRes && uploadRes.success && uploadRes.data) {
       const doc = uploadRes.data;
       STATE.addRecordFlow.uploadedDocId = doc.id;
       STATE.addRecordFlow.selectedType = doc.document_type || STATE.addRecordFlow.selectedType;
-      STATE.addRecordFlow.confidenceScore = doc.confidence_score != null ? doc.confidence_score : 0.88;
-      STATE.addRecordFlow.processingStatus = doc.processing_status || 'PROCESSED';
+      STATE.addRecordFlow.confidenceScore = doc.confidence_score ?? null;
+      STATE.addRecordFlow.processingStatus = doc.processing_status || 'PENDING';
       STATE.addRecordFlow.extractedData = doc.parsed_data || {};
       STATE.addRecordFlow.rawText = doc.extracted_text || '';
 
@@ -3664,231 +3627,98 @@ async function executeUploadPipeline(fileOrName) {
       }, 700);
 
     } else {
-      // Real extraction error handling — NEVER substitute fake demo data silently!
       console.warn('[Upload] Backend response unsuccessful:', uploadRes);
+      STATE.addRecordFlow.processingStatus = 'FAILED';
+      STATE.addRecordFlow.confidenceScore = null;
+      STATE.addRecordFlow.extractedData = null;
       if (s1) {
         s1.className = 'processing-step-row pending';
         s1.style.color = '#ef4444';
-        s1.innerHTML = `<span>✕</span> <span>Extraction issue: ${escapeHtml(uploadRes?.error?.message || 'Server error')}</span>`;
+        s1.innerHTML = `<span>✕</span> <span>Upload failed: ${escapeHtml(uploadRes?.error?.message || 'Server error')}</span>`;
       }
-      setTimeout(() => {
-        STATE.addRecordFlow.step = 6;
-        STATE.addRecordFlow.confidenceScore = 0.30;
-        STATE.addRecordFlow.extractedData = {
-          document_title: fileName,
-          review_issues: [{ field: 'upload', issue: 'Could not connect to processing service. Please enter fields manually.', severity: 'warning' }]
-        };
-        renderAddRecordStep();
-      }, 900);
+      alert(uploadRes?.error?.message || 'The server could not process this upload. Nothing was saved.');
+      STATE.addRecordFlow.step = 4;
+      renderAddRecordStep();
     }
   } catch (err) {
     console.error('[Upload] Pipeline error:', err);
-    STATE.addRecordFlow.step = 6;
-    STATE.addRecordFlow.confidenceScore = 0.20;
-    STATE.addRecordFlow.extractedData = {
-      document_title: fileName,
-      review_issues: [{ field: 'upload', issue: `Upload error: ${err.message}. Please enter details manually.`, severity: 'warning' }]
-    };
+    STATE.addRecordFlow.processingStatus = 'FAILED';
+    STATE.addRecordFlow.confidenceScore = null;
+    STATE.addRecordFlow.extractedData = null;
+    STATE.addRecordFlow.step = 4;
     renderAddRecordStep();
+    alert(`Upload failed: ${err.message || 'Unable to reach the processing service'}. Nothing was saved.`);
   }
 }
 
 // Feature 3: Smart Verification & Missing Information Detection Confirmation
 async function confirmAndSaveRecord(saveUnresolved = false) {
   const flow = STATE.addRecordFlow;
-  const docId = flow.uploadedDocId || ('doc-' + Date.now());
-  const fileName = flow.uploadedFileName || 'medical_report.pdf';
-  const docType = flow.selectedType || 'DOCUMENT';
+  if (window.DEMO_PREVIEW || STATE.demoPreview) {
+    alert("Demo preview is read-only. Sign in to save medical records.");
+    return;
+  }
+  if (!STATE.patient?.id || !flow.uploadedDocId) {
+    alert("No successfully uploaded document was found. Upload a real file first; nothing has been saved.");
+    return;
+  }
 
-  const titleInp = document.getElementById('verify-title-input');
-  const dateInp = document.getElementById('verify-date-input');
-  const hospInp = document.getElementById('verify-hosp-input');
-  const patInp = document.getElementById('verify-patient-input');
-
-  const verifiedTitle = (titleInp && titleInp.value.trim()) || 'Medical Record';
-  const verifiedDate = (dateInp && dateInp.value.trim()) || new Date().toISOString().split('T')[0];
-  const verifiedHosp = (hospInp && hospInp.value.trim()) || 'Clinical Center';
-  const verifiedPatient = (patInp && patInp.value.trim()) || (STATE.patient && STATE.patient.name) || 'Patient';
-
-  // Gather lab results if lab report
+  const readValue = id => document.getElementById(id)?.value?.trim() || "";
   const gatheredLabs = [];
-  document.querySelectorAll('.lab-result-val').forEach(inp => {
-    const idx = inp.getAttribute('data-idx');
-    const nameEl = document.querySelector(`.lab-name-val[data-idx="${idx}"]`);
-    const unitEl = document.querySelector(`.lab-unit-val[data-idx="${idx}"]`);
-    const rangeEl = document.querySelector(`.lab-range-val[data-idx="${idx}"]`);
-    if (nameEl && nameEl.value.trim()) {
-      gatheredLabs.push({
-        test_name: nameEl.value.trim(),
-        result: inp.value.trim(),
-        unit: (unitEl && unitEl.value.trim()) || '',
-        reference_range: (rangeEl && rangeEl.value.trim()) || '',
-      });
-    }
+  document.querySelectorAll(".lab-result-val").forEach(input => {
+    const idx = input.getAttribute("data-idx");
+    const name = document.querySelector(`.lab-name-val[data-idx="${idx}"]`)?.value?.trim();
+    const unit = document.querySelector(`.lab-unit-val[data-idx="${idx}"]`)?.value?.trim() || "";
+    const range = document.querySelector(`.lab-range-val[data-idx="${idx}"]`)?.value?.trim() || "";
+    if (name) gatheredLabs.push({ test_name: name, result: input.value.trim(), unit, reference_range: range });
   });
-
-  const manualLab = document.getElementById('verify-lab-manual');
-  if (manualLab && manualLab.value.trim()) {
-    const parts = manualLab.value.split(':');
-    gatheredLabs.push({
-      test_name: parts[0].trim(),
-      result: (parts[1] || '').trim(),
-      unit: '',
-      reference_range: '',
-    });
+  const manualLab = readValue("verify-lab-manual");
+  if (manualLab) {
+    const parts = manualLab.split(":");
+    gatheredLabs.push({ test_name: parts[0].trim(), result: (parts[1] || "").trim(), unit: "", reference_range: "" });
   }
 
-  // Gather medications if prescription
   const gatheredMeds = [];
-  document.querySelectorAll('.med-dose-val').forEach(inp => {
-    const idx = inp.getAttribute('data-idx');
-    const nameEl = document.querySelector(`.med-name-val[data-idx="${idx}"]`);
-    const freqEl = document.querySelector(`.med-freq-val[data-idx="${idx}"]`);
-    const routeEl = document.querySelector(`.med-route-val[data-idx="${idx}"]`);
-    if (nameEl && nameEl.value.trim()) {
-      gatheredMeds.push({
-        name: nameEl.value.trim(),
-        dosage: inp.value.trim(),
-        frequency: (freqEl && freqEl.value.trim()) || '',
-        route: (routeEl && routeEl.value.trim()) || 'Oral',
-        status: 'CURRENT',
-      });
-    }
+  document.querySelectorAll(".med-dose-val").forEach(input => {
+    const idx = input.getAttribute("data-idx");
+    const name = document.querySelector(`.med-name-val[data-idx="${idx}"]`)?.value?.trim();
+    const frequency = document.querySelector(`.med-freq-val[data-idx="${idx}"]`)?.value?.trim() || "";
+    const route = document.querySelector(`.med-route-val[data-idx="${idx}"]`)?.value?.trim() || "";
+    if (name) gatheredMeds.push({ name, dosage: input.value.trim(), frequency, route, status: "CURRENT" });
   });
+  const manualMed = readValue("verify-manual-med");
+  if (manualMed) gatheredMeds.push({ name: manualMed, dosage: "", frequency: readValue("verify-manual-freq"), route: "", status: "CURRENT" });
 
-  const manualMed = document.getElementById('verify-manual-med');
-  const manualFreq = document.getElementById('verify-manual-freq');
-  if (manualMed && manualMed.value.trim()) {
-    gatheredMeds.push({
-      name: manualMed.value.trim(),
-      dosage: '',
-      frequency: (manualFreq && manualFreq.value.trim()) || '',
-      route: 'Oral',
-      status: 'CURRENT',
-    });
-  }
-
-  // Gather diagnoses and notes
-  const diagInp = document.getElementById('verify-diagnoses-input');
-  const notesInp = document.getElementById('verify-notes-input');
-  const diagnoses = diagInp && diagInp.value ? diagInp.value.split(',').map(s => s.trim()).filter(Boolean) : [];
-  const clinicalNotes = notesInp ? notesInp.value.trim() : '';
-
-  // Gather receipts
-  const invInp = document.getElementById('verify-invoice-input');
-  const totInp = document.getElementById('verify-total-input');
-  const totalAmount = totInp ? totInp.value.trim() : '';
-
-  const reviewStatus = saveUnresolved ? 'SAVED_WITH_UNRESOLVED' : 'VERIFIED';
-
-  // Real backend call to persist review & promote entities to DB
-  try {
-    if (window.API && typeof window.API.reviewDocument === 'function' && flow.uploadedDocId) {
-      await window.API.reviewDocument(flow.uploadedDocId, {
-        status: reviewStatus,
-        document_type: docType,
-        document_title: verifiedTitle,
-        document_date: verifiedDate,
-        hospital_name: verifiedHosp,
-        patient_name: verifiedPatient,
-        medications: gatheredMeds,
-        lab_results: gatheredLabs,
-        diagnoses: diagnoses,
-        clinical_notes: clinicalNotes,
-        total_amount: totalAmount,
-        save_unresolved: saveUnresolved,
-      });
-    }
-  } catch (err) {
-    console.warn('[Review] Backend review call failed:', err);
-  }
-
-  // Construct confirmed document object
-  const newDoc = {
-    id: docId,
-    name: verifiedTitle,
-    type: docType,
-    file: fileName,
-    date: verifiedDate,
-    status: reviewStatus,
+  const payload = {
+    status: saveUnresolved ? "SAVED_WITH_UNRESOLVED" : "VERIFIED",
+    document_type: flow.selectedType || "DOCUMENT",
+    document_title: readValue("verify-title-input") || flow.uploadedFileName || "Medical record",
+    document_date: readValue("verify-date-input") || null,
+    hospital_name: readValue("verify-hosp-input") || null,
+    patient_name: readValue("verify-patient-input") || STATE.patient.name,
     medications: gatheredMeds,
-    labs: gatheredLabs,
+    lab_results: gatheredLabs,
+    diagnoses: readValue("verify-diagnoses-input").split(",").map(s => s.trim()).filter(Boolean),
+    clinical_notes: readValue("verify-notes-input"),
+    total_amount: readValue("verify-total-input"),
+    save_unresolved: saveUnresolved,
   };
 
-  // Add/Update Hospital in STATE
-  if (!STATE.hospitals || STATE.hospitals.length === 0) {
-    STATE.hospitals = [{
-      id: 'hosp-' + Date.now(),
-      name: verifiedHosp,
-      shortName: verifiedHosp.split(',')[0],
-      visitCount: 1,
-      recordCount: 1,
-      doctor: 'Attending Physician',
-    }];
-  } else {
-    STATE.hospitals[0].recordCount = (STATE.hospitals[0].recordCount || 0) + 1;
+  const result = await window.API.reviewDocument(flow.uploadedDocId, payload);
+  if (!result?.success) {
+    alert(result?.error?.message || "The server could not save the review. Your record has not been marked as saved.");
+    return;
   }
 
-  // Add/Update Visit in STATE
-  const localVisitMeds = gatheredMeds.map(m => ({
-    name: m.name,
-    dose: m.dosage || '',
-    freq: m.frequency || '',
-    status: 'CURRENT'
-  }));
-  const localVisitLabs = gatheredLabs.map(l => ({
-    test: l.test_name,
-    value: l.result || '',
-    unit: l.unit || '',
-    range: l.reference_range || '',
-    status: 'optimal'
-  }));
-
-  if (!STATE.visits || STATE.visits.length === 0) {
-    STATE.visits = [{
-      id: 'visit-' + Date.now(),
-      date: verifiedDate,
-      dateRaw: verifiedDate,
-      hospitalName: verifiedHosp,
-      doctorName: 'Attending Physician',
-      type: docType === 'PRESCRIPTION' ? 'Prescription Review' : 'Consultation Record',
-      summary: `Verified record: ${verifiedTitle}`,
-      medications: localVisitMeds,
-      labs: localVisitLabs,
-      documents: [newDoc],
-    }];
-  } else {
-    STATE.visits[0].documents.unshift(newDoc);
-    if (localVisitMeds.length > 0) {
-      STATE.visits[0].medications = [...localVisitMeds, ...(STATE.visits[0].medications || [])];
-    }
-    if (localVisitLabs.length > 0) {
-      STATE.visits[0].labs = [...localVisitLabs, ...(STATE.visits[0].labs || [])];
-    }
-  }
-
-  // Persist to localStorage
-  if (STATE.patient?.id) {
-    try {
-      localStorage.setItem('hc_records_' + STATE.patient.id, JSON.stringify({
-        visits: STATE.visits,
-        hospitals: STATE.hospitals,
-        changes: STATE.changes,
-      }));
-    } catch (e) {}
-  }
-
+  await syncWithBackend();
   closeAddRecordFlow();
-
-  const toast = document.createElement('div');
-  toast.style.cssText = 'position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:#064e3b;color:white;padding:10px 18px;border-radius:99px;font-size:13px;font-weight:600;box-shadow:0 8px 24px rgba(0,0,0,0.2);z-index:99999;display:flex;align-items:center;gap:8px;';
-  toast.innerHTML = `<span>✓</span> Medical record verified & saved (${reviewStatus})`;
+  const toast = document.createElement("div");
+  toast.style.cssText = "position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:#064e3b;color:white;padding:10px 18px;border-radius:99px;font-size:13px;font-weight:600;box-shadow:0 8px 24px rgba(0,0,0,0.2);z-index:99999;";
+  toast.textContent = "Medical record review saved to your account.";
   document.body.appendChild(toast);
   setTimeout(() => toast.remove(), 2800);
-
-  navigate('records');
+  navigate("records");
 }
-
 
 // ─── SCREEN 5: RECORDS (ORGANIZED BY HOSPITAL & VISIT) ─────────────────────
 function renderRecords() {
@@ -3896,8 +3726,8 @@ function renderRecords() {
   if (!container) return;
 
   const totalVisits = STATE.visits?.length || 0;
-  const primaryHosp = STATE.hospitals?.[0]?.name || 'City Care Hospital, Chennai';
-  const primaryDoc = STATE.hospitals?.[0]?.doctor || 'Dr. Priya Sharma';
+  const primaryHosp = STATE.hospitals?.[0]?.name || 'Healthcare provider not recorded';
+  const primaryDoc = STATE.hospitals?.[0]?.doctor || 'Clinician not recorded';
   const totalDocs = STATE.visits.reduce((acc, v) => acc + (v.documents ? v.documents.length : 0), 0);
 
   if (totalVisits === 0) {
@@ -4002,11 +3832,11 @@ function viewDocumentDetail(title, fileName, date, docType = 'CLINICAL_RECORD') 
   const sheet = document.getElementById('doc-preview-sheet');
   if (!modal || !sheet) return;
 
-  const pName = STATE.patient?.name || 'Ramesh Kumar';
-  const pUhid = STATE.patient?.uhid || 'HC-2024-00847';
+  const pName = STATE.patient?.name || 'Patient';
+  const pUhid = STATE.patient?.uhid || 'Not recorded';
   const pAge = STATE.patient?.age ? `${STATE.patient.age}y` : '';
-  const pHosp = STATE.hospitals?.[0]?.name || 'City Care Hospital, Chennai';
-  const pDoc = STATE.hospitals?.[0]?.doctor || 'Dr. Priya Sharma';
+  const pHosp = STATE.hospitals?.[0]?.name || 'Healthcare provider not recorded';
+  const pDoc = STATE.hospitals?.[0]?.doctor || 'Clinician not recorded';
 
   sheet.innerHTML = `
     <div style="width:100%;padding:4px 0;">
@@ -4016,7 +3846,7 @@ function viewDocumentDetail(title, fileName, date, docType = 'CLINICAL_RECORD') 
           <span class="doc-stamp-badge">
             ✓ Verified Medical Record
           </span>
-          <span style="font-size:11px;color:var(--text-tertiary);">${date || '20 Jun 2026'}</span>
+          <span style="font-size:11px;color:var(--text-tertiary);">${date || 'Date not recorded'}</span>
         </div>
         <button class="btn-icon" onclick="closeDocPreview()">${getIcon('close', 'width:18px;height:18px;')}</button>
       </div>
@@ -4692,15 +4522,16 @@ function renderDoctorAccess() {
   if (!container) return;
 
   const access = STATE.doctorAccess || {};
-  const { code = '------', expiresInSeconds = 0, status = 'ACTIVE', purpose = 'DEMO PURPOSE ONLY', isRevoked = false, pendingRequest } = access;
-  const isExpired = expiresInSeconds <= 0 && !isRevoked;
+  const { code = "", expiresInSeconds = 0, status = "NONE", purpose = "PATIENT_APPROVED_CLINICAL_REVIEW", isRevoked = false, pendingRequest = null } = access;
+  const hasCode = Boolean(code && code !== "------");
+  const isExpired = status === "EXPIRED" || (hasCode && expiresInSeconds <= 0 && !isRevoked);
   const minutes = Math.floor(Math.max(0, expiresInSeconds) / 60);
   const seconds = Math.max(0, expiresInSeconds) % 60;
   const timeFormatted = `${minutes}:${seconds < 10 ? '0' : ''}${seconds}`;
 
   let badgeColor = '#2563eb';
   let badgeBg = '#eff6ff';
-  let statusText = 'ACTIVE · 20 MIN';
+  let statusText = hasCode && status === 'ACTIVE' ? 'ACTIVE · 20 MIN' : (status === 'PREVIEW' ? 'SAMPLE PREVIEW' : 'NO ACTIVE PIN');
   if (isRevoked) {
     badgeColor = '#dc2626';
     badgeBg = '#fef2f2';
@@ -4720,7 +4551,7 @@ function renderDoctorAccess() {
         </button>
         <div>
           <h1 style="font-size:18px;font-weight:700;color:var(--text-primary);margin:0;">Share with Doctor</h1>
-          <div style="font-size:11px;color:var(--text-secondary);">20-minute temporary demonstration access</div>
+          <div style="font-size:11px;color:var(--text-secondary);">20-minute patient-approved temporary access</div>
         </div>
       </div>
       <span style="font-size:11px;font-weight:700;color:${badgeColor};background:${badgeBg};padding:3px 8px;border-radius:12px;text-transform:uppercase;letter-spacing:0.5px;">
@@ -4738,19 +4569,19 @@ function renderDoctorAccess() {
         </div>
 
         <div style="font-size:12px;font-weight:700;color:var(--text-tertiary);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;">
-          DEMO ACCESS PIN
+          PATIENT-APPROVED ACCESS PIN
         </div>
 
         <div class="code-box-display" style="font-size:36px;font-weight:800;letter-spacing:6px;color:var(--text-primary);font-family:monospace;padding:12px 16px;background:var(--bg-card-alt);border-radius:var(--r-xl);margin:8px auto 14px;max-width:240px;border:1px dashed var(--separator);">
           ${isRevoked ? 'REVOKED' : (code || '------')}
         </div>
 
-        ${!isRevoked && !isExpired ? `
+        ${hasCode && !isRevoked && !isExpired && status === 'ACTIVE' ? `
           <div style="font-size:14px;color:var(--text-secondary);font-weight:500;">
             Expires in <strong style="color:var(--blue);font-family:monospace;font-size:16px;">${timeFormatted}</strong>
           </div>
           <div style="font-size:11px;color:var(--text-tertiary);margin-top:4px;">
-            Authoritative 20-minute server countdown
+            Server-verified 20-minute expiry
           </div>
         ` : ''}
 
@@ -4760,15 +4591,15 @@ function renderDoctorAccess() {
           </div>
         ` : ''}
 
-        ${isExpired && !isRevoked ? `
+        ${hasCode && isExpired && !isRevoked ? `
           <div style="font-size:13px;color:#d97706;font-weight:600;margin-top:4px;">
-            This demonstration PIN has expired. Generate a new PIN to grant access.
+            This PIN has expired. Generate a new PIN to request temporary access.
           </div>
         ` : ''}
 
         <div style="margin-top:18px;display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
           <button class="btn btn-primary btn-sm" onclick="generateNewAccessCode()">
-            ${getIcon('refresh', 'width:14px;height:14px;margin-right:4px;')} Generate Demo PIN
+            ${getIcon('refresh', 'width:14px;height:14px;margin-right:4px;')} Generate temporary PIN
           </button>
           ${!isRevoked && !isExpired && code && code !== '------' ? `
             <button class="btn btn-secondary btn-sm" style="color:#dc2626;border-color:#fecaca;" onclick="revokeCurrentPin()">
@@ -4781,17 +4612,17 @@ function renderDoctorAccess() {
       <!-- Demonstration Access Rules Info Card -->
       <div style="margin-top:16px;padding:16px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:var(--r-xl);">
         <div style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:700;color:#1e293b;margin-bottom:6px;">
-          <span>🔒</span> Safe Demonstration Rules
+          <span>🔒</span> Patient-approved Access Rules
         </div>
         <ul style="margin:0;padding-left:18px;font-size:12px;color:#475569;line-height:1.6;">
           <li>Valid for exactly <strong>20 minutes</strong> from generation.</li>
-          <li>Grants read-only demonstration view of medications, lab results, and documents.</li>
+          <li>Grants read-only access only to the scopes authorized by the patient.</li>
           <li>Can be revoked by you at any time before expiry.</li>
-          <li>All access attempts and reviews are securely audited.</li>
+          <li>Access attempts and reviews are recorded in the audit log.</li>
         </ul>
       </div>
 
-      <!-- Access Request Approval Simulation -->
+      <!-- Access Request -->
       ${pendingRequest ? `
         <div style="margin-top:16px;background:#f0f5ff;border:1.5px solid rgba(37,99,235,0.2);border-radius:var(--r-xl);padding:18px;">
           <div style="font-size:11px;font-weight:700;color:var(--blue);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">
@@ -4818,88 +4649,82 @@ function renderDoctorAccess() {
 }
 
 function startAccessCountdown() {
-  if (STATE.doctorAccess && STATE.doctorAccess.timerId) {
-    clearInterval(STATE.doctorAccess.timerId);
-  }
-  if (!STATE.doctorAccess) {
-    STATE.doctorAccess = {
-      code: '------',
-      expiresInSeconds: 0,
-      timerId: null,
-      status: 'PENDING',
-      purpose: 'DEMO PURPOSE ONLY',
-      isRevoked: false,
-    };
-  }
+  if (STATE.doctorAccess?.timerId) clearInterval(STATE.doctorAccess.timerId);
+  if (!STATE.doctorAccess) return;
+  if (STATE.doctorAccess.status !== "ACTIVE" || !STATE.doctorAccess.expiresInSeconds) return;
 
   STATE.doctorAccess.timerId = setInterval(() => {
     if (STATE.doctorAccess.expiresInSeconds > 0 && !STATE.doctorAccess.isRevoked) {
       STATE.doctorAccess.expiresInSeconds--;
-      if (activeScreen === 'access') renderDoctorAccess();
+      if (activeScreen === "access") renderDoctorAccess();
     } else {
       clearInterval(STATE.doctorAccess.timerId);
-      if (activeScreen === 'access') renderDoctorAccess();
+      STATE.doctorAccess.timerId = null;
+      STATE.doctorAccess.status = STATE.doctorAccess.isRevoked ? "REVOKED" : "EXPIRED";
+      if (activeScreen === "access") renderDoctorAccess();
     }
   }, 1000);
 }
 
 async function generateNewAccessCode() {
-  const patientId = (STATE.patient && STATE.patient.id) || 'pat-ramesh-001';
-
-  try {
-    if (window.API && typeof window.API.generateDemoPin === 'function') {
-      const res = await window.API.generateDemoPin(patientId);
-      if (res && res.success && res.data) {
-        STATE.doctorAccess.code = res.data.access_code;
-        STATE.doctorAccess.accessId = res.data.id;
-        STATE.doctorAccess.expiresInSeconds = res.data.expires_in_seconds || 1200;
-        STATE.doctorAccess.expiresAt = res.data.expires_at;
-        STATE.doctorAccess.status = 'ACTIVE';
-        STATE.doctorAccess.purpose = res.data.purpose || 'DEMO PURPOSE ONLY';
-        STATE.doctorAccess.isRevoked = false;
-        startAccessCountdown();
-        renderDoctorAccess();
-        return;
-      }
-    }
-  } catch (e) {
-    console.warn('API generate demo pin failed, using local demo fallback:', e);
+  if (window.DEMO_PREVIEW || STATE.demoPreview) {
+    alert("Demo preview is read-only. Sign in to create a temporary access PIN.");
+    return;
+  }
+  const patientId = STATE.patient?.id;
+  if (!patientId) {
+    alert("Sign in before generating a patient access PIN.");
+    return;
   }
 
-  // Fallback random 6-digit PIN
-  const randomPin = Math.floor(100000 + Math.random() * 900000).toString();
-  STATE.doctorAccess.code = randomPin;
-  STATE.doctorAccess.accessId = 'local-' + Date.now();
-  STATE.doctorAccess.expiresInSeconds = 1200; // 20 minutes
-  STATE.doctorAccess.status = 'ACTIVE';
-  STATE.doctorAccess.purpose = 'DEMO PURPOSE ONLY';
-  STATE.doctorAccess.isRevoked = false;
+  const result = await window.API.generateAccessPin(patientId);
+  if (!result?.success || !result.data?.access_code || !result.data?.id) {
+    alert(result?.error?.message || "The server could not create an access PIN. No PIN was generated.");
+    return;
+  }
+
+  STATE.doctorAccess = {
+    ...(STATE.doctorAccess || {}),
+    code: result.data.access_code,
+    accessId: result.data.id,
+    expiresInSeconds: result.data.expires_in_seconds || 1200,
+    expiresAt: result.data.expires_at,
+    status: "ACTIVE",
+    purpose: result.data.purpose || "DEMO_PURPOSE_ONLY",
+    isRevoked: false,
+    timerId: null,
+    pendingRequest: null,
+  };
   startAccessCountdown();
   renderDoctorAccess();
 }
 
 async function revokeCurrentPin() {
-  const patientId = (STATE.patient && STATE.patient.id) || 'pat-ramesh-001';
-  const accessId = STATE.doctorAccess.accessId;
-
-  if (accessId && window.API && typeof window.API.revokeDemoPin === 'function') {
-    try {
-      await window.API.revokeDemoPin(accessId, patientId);
-    } catch (e) {
-      console.warn('API revoke note:', e);
-    }
+  if (window.DEMO_PREVIEW || STATE.demoPreview) {
+    alert("Demo preview is read-only. Sign in to manage access permissions.");
+    return;
   }
-
+  const patientId = STATE.patient?.id;
+  const accessId = STATE.doctorAccess?.accessId;
+  if (!patientId || !accessId) {
+    alert("There is no server-issued access PIN to revoke.");
+    return;
+  }
+  const result = await window.API.revokeAccessPin(accessId, patientId);
+  if (!result?.success) {
+    alert(result?.error?.message || "The server could not revoke this PIN.");
+    return;
+  }
   STATE.doctorAccess.isRevoked = true;
-  STATE.doctorAccess.status = 'REVOKED';
+  STATE.doctorAccess.status = "REVOKED";
   STATE.doctorAccess.expiresInSeconds = 0;
   if (STATE.doctorAccess.timerId) clearInterval(STATE.doctorAccess.timerId);
+  STATE.doctorAccess.timerId = null;
   renderDoctorAccess();
 }
 
 function approveDoctorAccess() {
-  STATE.doctorAccess.pendingRequest = null;
-  alert('Access approved. Dr. Priya Sharma now has temporary 20-minute access to review your health journey.');
+  alert("Access is granted only after the server verifies a valid, unexpired PIN and patient-approved scope.");
   renderDoctorAccess();
 }
 
@@ -5006,26 +4831,17 @@ async function initApp() {
   updateIosClock();
   setInterval(updateIosClock, 10000);
 
-  // Restore existing session if present, otherwise show login
-  let hasSession = false;
-  try {
-    const savedUserJson = localStorage.getItem('hc_auth_user');
-    if (savedUserJson) {
-      const savedUser = JSON.parse(savedUserJson);
-      if (savedUser?.patient) {
-        loadPatientData(savedUser.patient);
-        hasSession = true;
-      }
-    }
-  } catch (e) {}
-
-  setTimeout(() => {
-    if (hasSession) {
-      navigate('home');
+  // Restore only a verified Supabase session; never trust a cached patient object as authentication.
+  setTimeout(async () => {
+    const restored = await window.API.restoreSession();
+    if (restored?.success && restored.data?.patient?.id) {
+      await handleAuthSuccess(restored.data, true);
     } else {
+      window.DEMO_PREVIEW = false;
+      loadPatientData({});
       navigate('login');
     }
-  }, 1400);
+  }, 700);
 }
 
 document.addEventListener('DOMContentLoaded', initApp);

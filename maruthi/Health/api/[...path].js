@@ -2,7 +2,9 @@
 module.exports = async function handler(req, res) {
   const base = (process.env.HC_API_BASE_URL || '').replace(/\/+$/, '');
   if (!base) return res.status(503).json({ success: false, error: { code: 'BACKEND_NOT_CONFIGURED', message: 'Set HC_API_BASE_URL in Vercel project settings.' } });
-  const target = base + req.url;
+  const incoming = req.url || '/';
+  const apiPath = incoming.startsWith('/api/') ? incoming : '/api' + (incoming.startsWith('/') ? incoming : '/' + incoming);
+  const target = base + apiPath;
   const headers = { ...req.headers }; delete headers.host;
   const chunks = []; for await (const chunk of req) chunks.push(Buffer.from(chunk));
   const body = chunks.length ? Buffer.concat(chunks) : undefined;
@@ -15,3 +17,6 @@ module.exports = async function handler(req, res) {
     return res.status(502).json({ success: false, error: { code: 'BACKEND_PROXY_ERROR', message: 'Could not reach the configured backend.' } });
   }
 };
+
+// Preserve multipart upload streams so medical files reach FastAPI byte-for-byte.
+module.exports.config = { api: { bodyParser: false } };
