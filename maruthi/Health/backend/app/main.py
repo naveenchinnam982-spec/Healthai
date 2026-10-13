@@ -152,7 +152,9 @@ async def require_supabase_session_and_ownership(request: Request, call_next):
                 or (path == "/api/doctor-access/review-queue" and request.method == "POST")
                 or bool(re.match(r"^/api/doctor-access/[^/]+$", path))
             )
-            if path != "/api/auth/profile":
+            # Production startup requires PostgreSQL. Keep the role lookup tied to
+            # the public Supabase profile table; SQLite is used only by isolated tests.
+            if path != "/api/auth/profile" and db.bind and db.bind.dialect.name == "postgresql":
                 role_result = await db.execute(text("SELECT role FROM public.profiles WHERE id = :id"), {"id": user_id})
                 role = role_result.scalar_one_or_none()
                 if doctor_only:
