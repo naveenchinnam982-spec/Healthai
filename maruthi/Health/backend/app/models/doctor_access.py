@@ -83,8 +83,6 @@ class ReviewQueueItem(Base):
     access_code: Mapped[str | None] = mapped_column(String(10), nullable=True)
 
     title: Mapped[str] = mapped_column(String(200), nullable=False)
-    doctor_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
-    access_code: Mapped[str | None] = mapped_column(String(10), nullable=True)
     document_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     document_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     change_event_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
@@ -103,7 +101,6 @@ class ReviewQueueItem(Base):
     priority: Mapped[str] = mapped_column(String(20), default="ROUTINE")
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
-    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     def __repr__(self) -> str:
         return f"<ReviewQueueItem id={self.id!r} title={self.title!r} status={self.status!r}>"
