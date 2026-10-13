@@ -4657,88 +4657,82 @@ function renderDoctorAccess() {
 }
 
 function startAccessCountdown() {
-  if (STATE.doctorAccess && STATE.doctorAccess.timerId) {
-    clearInterval(STATE.doctorAccess.timerId);
-  }
-  if (!STATE.doctorAccess) {
-    STATE.doctorAccess = {
-      code: '------',
-      expiresInSeconds: 0,
-      timerId: null,
-      status: 'PENDING',
-      purpose: 'DEMO PURPOSE ONLY',
-      isRevoked: false,
-    };
-  }
+  if (STATE.doctorAccess?.timerId) clearInterval(STATE.doctorAccess.timerId);
+  if (!STATE.doctorAccess) return;
+  if (STATE.doctorAccess.status !== "ACTIVE" || !STATE.doctorAccess.expiresInSeconds) return;
 
   STATE.doctorAccess.timerId = setInterval(() => {
     if (STATE.doctorAccess.expiresInSeconds > 0 && !STATE.doctorAccess.isRevoked) {
       STATE.doctorAccess.expiresInSeconds--;
-      if (activeScreen === 'access') renderDoctorAccess();
+      if (activeScreen === "access") renderDoctorAccess();
     } else {
       clearInterval(STATE.doctorAccess.timerId);
-      if (activeScreen === 'access') renderDoctorAccess();
+      STATE.doctorAccess.timerId = null;
+      STATE.doctorAccess.status = STATE.doctorAccess.isRevoked ? "REVOKED" : "EXPIRED";
+      if (activeScreen === "access") renderDoctorAccess();
     }
   }, 1000);
 }
 
 async function generateNewAccessCode() {
-  const patientId = (STATE.patient && STATE.patient.id) || 'pat-ramesh-001';
-
-  try {
-    if (window.API && typeof window.API.generateDemoPin === 'function') {
-      const res = await window.API.generateDemoPin(patientId);
-      if (res && res.success && res.data) {
-        STATE.doctorAccess.code = res.data.access_code;
-        STATE.doctorAccess.accessId = res.data.id;
-        STATE.doctorAccess.expiresInSeconds = res.data.expires_in_seconds || 1200;
-        STATE.doctorAccess.expiresAt = res.data.expires_at;
-        STATE.doctorAccess.status = 'ACTIVE';
-        STATE.doctorAccess.purpose = res.data.purpose || 'DEMO PURPOSE ONLY';
-        STATE.doctorAccess.isRevoked = false;
-        startAccessCountdown();
-        renderDoctorAccess();
-        return;
-      }
-    }
-  } catch (e) {
-    console.warn('API generate demo pin failed, using local demo fallback:', e);
+  if (window.DEMO_PREVIEW || STATE.demoPreview) {
+    alert("Demo preview is read-only. Sign in to create a temporary access PIN.");
+    return;
+  }
+  const patientId = STATE.patient?.id;
+  if (!patientId) {
+    alert("Sign in before generating a patient access PIN.");
+    return;
   }
 
-  // Fallback random 6-digit PIN
-  const randomPin = Math.floor(100000 + Math.random() * 900000).toString();
-  STATE.doctorAccess.code = randomPin;
-  STATE.doctorAccess.accessId = 'local-' + Date.now();
-  STATE.doctorAccess.expiresInSeconds = 1200; // 20 minutes
-  STATE.doctorAccess.status = 'ACTIVE';
-  STATE.doctorAccess.purpose = 'DEMO PURPOSE ONLY';
-  STATE.doctorAccess.isRevoked = false;
+  const result = await window.API.generateDemoPin(patientId);
+  if (!result?.success || !result.data?.access_code || !result.data?.id) {
+    alert(result?.error?.message || "The server could not create an access PIN. No PIN was generated.");
+    return;
+  }
+
+  STATE.doctorAccess = {
+    ...(STATE.doctorAccess || {}),
+    code: result.data.access_code,
+    accessId: result.data.id,
+    expiresInSeconds: result.data.expires_in_seconds || 1200,
+    expiresAt: result.data.expires_at,
+    status: "ACTIVE",
+    purpose: result.data.purpose || "DEMO_PURPOSE_ONLY",
+    isRevoked: false,
+    timerId: null,
+    pendingRequest: null,
+  };
   startAccessCountdown();
   renderDoctorAccess();
 }
 
 async function revokeCurrentPin() {
-  const patientId = (STATE.patient && STATE.patient.id) || 'pat-ramesh-001';
-  const accessId = STATE.doctorAccess.accessId;
-
-  if (accessId && window.API && typeof window.API.revokeDemoPin === 'function') {
-    try {
-      await window.API.revokeDemoPin(accessId, patientId);
-    } catch (e) {
-      console.warn('API revoke note:', e);
-    }
+  if (window.DEMO_PREVIEW || STATE.demoPreview) {
+    alert("Demo preview is read-only. Sign in to manage access permissions.");
+    return;
   }
-
+  const patientId = STATE.patient?.id;
+  const accessId = STATE.doctorAccess?.accessId;
+  if (!patientId || !accessId) {
+    alert("There is no server-issued access PIN to revoke.");
+    return;
+  }
+  const result = await window.API.revokeDemoPin(accessId, patientId);
+  if (!result?.success) {
+    alert(result?.error?.message || "The server could not revoke this PIN.");
+    return;
+  }
   STATE.doctorAccess.isRevoked = true;
-  STATE.doctorAccess.status = 'REVOKED';
+  STATE.doctorAccess.status = "REVOKED";
   STATE.doctorAccess.expiresInSeconds = 0;
   if (STATE.doctorAccess.timerId) clearInterval(STATE.doctorAccess.timerId);
+  STATE.doctorAccess.timerId = null;
   renderDoctorAccess();
 }
 
 function approveDoctorAccess() {
-  STATE.doctorAccess.pendingRequest = null;
-  alert('Access approved. Dr. Priya Sharma now has temporary 20-minute access to review your health journey.');
+  alert("Access is granted only after the server verifies a valid, unexpired PIN and patient-approved scope.");
   renderDoctorAccess();
 }
 
