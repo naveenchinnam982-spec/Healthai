@@ -29,24 +29,23 @@ async def generate_access(
     """Create a new temporary 20-minute demonstration PIN for a patient."""
     code = generate_access_code(6)
     pin_h = hash_pin(code)
-    scope_str = ",".join(scopes) if scopes else "medical_history,medications,reports,changes,documents"
     expires_at = datetime.now(timezone.utc) + timedelta(
         minutes=settings.access_code_expire_minutes
     )
 
     access = DoctorAccess(
         patient_id=patient_id,
-        access_code=code,
-        pin_hash=pin_h,
+        code_hash=pin_h,
         doctor_name=doctor_name,
         doctor_email=doctor_email,
-        requested_scopes=scope_str,
+        requested_scopes=scopes or ["medical_history", "medications", "reports", "changes", "documents"],
         purpose="DEMO_PURPOSE_ONLY",
         status="ACTIVE",
         attempts=0,
         max_attempts=5,
         expires_at=expires_at,
     )
+    setattr(access, "_generated_access_code", code)  # Returned once; never persist the plaintext PIN.
     db.add(access)
 
     audit = AuditLog(
@@ -74,7 +73,7 @@ async def verify_access_code(
     """Return the access record if the code is valid and not expired (auto-expiring if past deadline)."""
     clean_code = code.replace("-", "").replace(" ", "").strip()
     result = await db.execute(
-        select(DoctorAccess).where(DoctorAccess.access_code == clean_code)
+        select(DoctorAccess).where(DoctorAccess.code_hash == hash_pin(clean_code))
     )
     access = result.scalar_one_or_none()
     if access is None:
@@ -192,7 +191,7 @@ async def redeem_pin(
 
     # 5. Success: Increment attempt and grant access
     access.attempts += 1
-    access.status = "APPROVED"
+    access.status = "ACTIVE"
     access.approved_at = now
     access.doctor_id = doctor.id
     access.doctor_name = doctor.full_name
@@ -268,7 +267,7 @@ async def check_doctor_authorization(
     now = datetime.now(timezone.utc)
     stmt = select(DoctorAccess).where(
         DoctorAccess.patient_id == patient_id,
-        DoctorAccess.status == "APPROVED",
+        DoctorAccess.status == "ACTIVE",
         DoctorAccess.doctor_id == doctor_id,
     )
     result = await db.execute(stmt)
