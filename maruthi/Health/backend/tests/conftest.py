@@ -1,3 +1,6 @@
+import os
+os.environ.setdefault("APP_ENV", "test")
+
 """
 Shared Pytest Configuration and Fixtures for HealthContinuum AI
 """
