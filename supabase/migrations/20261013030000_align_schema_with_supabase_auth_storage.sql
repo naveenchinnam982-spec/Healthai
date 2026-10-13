@@ -134,8 +134,6 @@ begin
   end loop;
 end $$;
 
-drop function if exists public.can_access_patient(text);
-
 -- A message's patient_id is the authorization boundary; do not rely only on conversation IDs.
 drop policy if exists messages_select_authorized on public.messages;
 create policy messages_select_authorized on public.messages
@@ -186,6 +184,8 @@ create policy medical_documents_delete_owner on storage.objects
 insert into storage.buckets (id, name, public)
 values ('medical-documents', 'medical-documents', false)
 on conflict (id) do update set public = false;
+
+drop function if exists public.can_access_patient(text);
 
 do $$
 begin
