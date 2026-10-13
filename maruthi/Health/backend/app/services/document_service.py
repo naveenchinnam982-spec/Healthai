@@ -10,6 +10,9 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
+
+import httpx
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,6 +22,7 @@ from app.models.audit_log import AuditLog
 from app.models.document import Document
 from app.models.lab_result import LabResult
 from app.models.medication import Medication
+from app.models.patient import Patient
 from app.models.visit import Visit
 from app.schemas.schemas import DocumentCreate, DocumentReviewRequest
 from app.services.extraction_service import extraction_engine
@@ -32,6 +36,38 @@ def _ensure_upload_dir(patient_id: str) -> Path:
     base_dir = Path(settings.storage_local_path) / patient_id
     base_dir.mkdir(parents=True, exist_ok=True)
     return base_dir
+
+
+
+async def _upload_to_supabase_storage(
+    *, owner_id: str, patient_id: str, document_id: str, file_name: str,
+    file_bytes: bytes, content_type: str,
+) -> str:
+    """Upload a medical file to the private Supabase bucket using server-only credentials."""
+    if not settings.supabase_url or not settings.supabase_service_role_key:
+        raise RuntimeError("Supabase Storage is not configured on the backend.")
+    safe_filename = "".join(c for c in file_name if c.isalnum() or c in (".", "_", "-")).strip() or "document.bin"
+    object_path = f"{owner_id}/{patient_id}/{document_id}_{safe_filename}"
+    encoded_path = quote(object_path, safe="/")
+    url = f"{settings.supabase_url.rstrip('/')}/storage/v1/object/medical-documents/{encoded_path}"
+    key = settings.supabase_service_role_key
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(45.0)) as client:
+            response = await client.post(
+                url,
+                content=file_bytes,
+                headers={
+                    "apikey": key,
+                    "Authorization": f"Bearer {key}",
+                    "Content-Type": content_type or "application/octet-stream",
+                    "x-upsert": "false",
+                },
+            )
+    except httpx.HTTPError as exc:
+        raise RuntimeError("Could not connect to Supabase Storage.") from exc
+    if response.status_code not in (200, 201):
+        raise RuntimeError(f"Supabase Storage rejected the upload (HTTP {response.status_code}).")
+    return object_path
 
 
 def _attach_parsed_data(doc: Document) -> Document:
@@ -123,16 +159,30 @@ async def upload_and_process_document(
     3. Persist Document record in DB with full candidate schema and status
     """
     doc_id = str(uuid.uuid4())
-    upload_dir = _ensure_upload_dir(patient_id)
-    safe_filename = "".join(c for c in file_name if c.isalnum() or c in (".", "_", "-")).strip() or "document.pdf"
-    disk_filename = f"{doc_id}_{safe_filename}"
-    file_path = upload_dir / disk_filename
-
-    # Save to disk
-    with open(file_path, "wb") as f:
-        f.write(file_bytes)
-
+    safe_filename = "".join(c for c in file_name if c.isalnum() or c in (".", "_", "-")).strip() or "document.bin"
     file_url = f"/api/documents/{doc_id}/file"
+    storage_path = None
+
+    if settings.storage_backend.lower() == "supabase":
+        patient_result = await db.execute(select(Patient).where(Patient.id == patient_id))
+        patient = patient_result.scalar_one_or_none()
+        if not patient or not patient.owner_id:
+            raise RuntimeError("Patient ownership must be linked to Supabase Auth before uploading files.")
+        storage_path = await _upload_to_supabase_storage(
+            owner_id=str(patient.owner_id),
+            patient_id=patient_id,
+            document_id=doc_id,
+            file_name=file_name,
+            file_bytes=file_bytes,
+            content_type=content_type,
+        )
+    else:
+        # Local storage is for development/test only; production startup rejects it.
+        upload_dir = _ensure_upload_dir(patient_id)
+        disk_filename = f"{doc_id}_{safe_filename}"
+        file_path = upload_dir / disk_filename
+        with open(file_path, "wb") as f:
+            f.write(file_bytes)
 
     # Run extraction engine on the real file
     extraction_res = extraction_engine.process_document(
@@ -154,6 +204,7 @@ async def upload_and_process_document(
         document_type=doc_type,
         file_name=file_name,
         file_url=file_url,
+        storage_path=storage_path,
         processing_status=processing_status,
         extracted_text=extracted_text,
         extracted_data=json.dumps(parsed_data),
