@@ -1490,7 +1490,7 @@ async def persist_chat_turn(
         content=resp_data.get("answer", ""),
         intent=resp_data.get("intent"),
         language=language,
-        citations=resp_data.get("citations", []),
+        citations_json=json.dumps(resp_data.get("citations", []), ensure_ascii=False),
         safety_status=resp_data.get("safety_status", "SAFE"),
         uncertainty_notes=resp_data.get("uncertainty_notes"),
         provider=resp_data.get("provider", "grounded_records_engine"),
