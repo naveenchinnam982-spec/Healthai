@@ -286,7 +286,7 @@ class GenerateAccessCodeOut(BaseModel):
     access_code: str
     expires_at: datetime
     status: str
-    purpose: str = "DEMO_PURPOSE_ONLY"
+    purpose: str = "PATIENT_APPROVED_CLINICAL_REVIEW"
     expires_in_seconds: int = 1200
 
     model_config = {"from_attributes": True}
@@ -311,7 +311,7 @@ class VerifyAccessCodeOut(BaseModel):
     requested_scopes: list[str] = Field(default_factory=list)
     status: str
     expires_at: datetime
-    purpose: str = "DEMO_PURPOSE_ONLY"
+    purpose: str = "PATIENT_APPROVED_CLINICAL_REVIEW"
 
     model_config = {"from_attributes": True}
 
