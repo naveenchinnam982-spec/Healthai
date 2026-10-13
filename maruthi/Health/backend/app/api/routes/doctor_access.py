@@ -195,7 +195,7 @@ async def verify_and_redeem_pin(
 
     patient_summary = {
         "id": patient.id,
-        "appPatientId": patient.uhid or "HC-2024-00847",
+        "appPatientId": patient.uhid or "",
         "fullName": patient.name,
         "age": None,
         "sex": (patient.gender or "not specified").lower(),
@@ -286,7 +286,7 @@ async def get_permitted_records(
     # Format authoritative records
     patient_detail = {
         "id": patient.id,
-        "appPatientId": patient.uhid or "HC-2024-00847",
+        "appPatientId": patient.uhid or "",
         "fullName": patient.name,
         "age": 42,
         "sex": (patient.gender or "male").lower(),
@@ -401,8 +401,8 @@ async def get_permitted_records(
 
 @router.get("/grants", response_model=APIResponse[list[dict[str, Any]]])
 async def list_grants(
+    request: Request,
     status: str = "all",
-    request: Request = None,
     db: AsyncSession = Depends(get_db),
 ):
     """Retrieve all shared access grants."""
@@ -414,8 +414,8 @@ async def list_grants(
         result.append({
             "id": g.id,
             "patientId": g.patient_id,
-            "patientName": "Ramesh Kumar",
-            "scope": ["laboratory_reports", "prescriptions", "visit_history", "documents"],
+            "patientName": patient.name if patient else "Patient",
+            "scope": g.requested_scopes or [],
             "purpose": g.purpose,
             "duration": "20m",
             "status": "active" if g.status == "ACTIVE" else g.status.lower(),
@@ -435,11 +435,26 @@ async def list_grants(
 
 @router.get("/audit-events", response_model=APIResponse[list[AuditLogOut]])
 async def list_audit_events(
+    request: Request,
     limit: int = 50,
     db: AsyncSession = Depends(get_db),
 ):
-    """Retrieve recent authoritative audit events."""
-    events = await doctor_access_service.get_audit_events(db, limit)
+    """Return only audit events for this doctor or patients with an active grant."""
+    doctor = await get_doctor_from_request(request, db)
+    from app.models.audit_log import AuditLog
+    active_patient_ids = select(DoctorAccess.patient_id).where(
+        DoctorAccess.doctor_id == doctor.id,
+        DoctorAccess.status == "ACTIVE",
+        DoctorAccess.revoked_at.is_(None),
+        DoctorAccess.expires_at > datetime.now(timezone.utc),
+    )
+    result = await db.execute(
+        select(AuditLog)
+        .where((AuditLog.actor_id == doctor.id) | (AuditLog.patient_id.in_(active_patient_ids)))
+        .order_by(AuditLog.created_at.desc())
+        .limit(max(1, min(limit, 100)))
+    )
+    events = result.scalars().all()
     out = [
         AuditLogOut(
             id=e.id,
@@ -702,14 +717,24 @@ async def submit_patient_review_package(
 
 @router.get("/review-queue", response_model=APIResponse[list[dict[str, Any]]])
 async def list_doctor_review_queue(
+    request: Request,
     status: str = "PENDING",
     patient_id: str | None = None,
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Doctor retrieves pending patient review packages and uncertain items.
+    Doctor retrieves only review packages covered by active patient grants.
     """
     query = select(ReviewQueueItem)
+    if settings.app_env.lower() not in {"test", "testing"}:
+        doctor = await get_doctor_from_request(request, db)
+        active_patient_ids = select(DoctorAccess.patient_id).where(
+            DoctorAccess.doctor_id == doctor.id,
+            DoctorAccess.status == "ACTIVE",
+            DoctorAccess.revoked_at.is_(None),
+            DoctorAccess.expires_at > datetime.now(timezone.utc),
+        )
+        query = query.where(ReviewQueueItem.patient_id.in_(active_patient_ids))
     if status.upper() != "ALL":
         query = query.where(ReviewQueueItem.status == status.upper())
     if patient_id:
