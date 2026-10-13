@@ -210,7 +210,7 @@ async def verify_and_redeem_pin(
         data={
             "grant": grant_data,
             "patient": patient_summary,
-            "purpose": "DEMO_PURPOSE_ONLY",
+            "purpose": "PATIENT_APPROVED_CLINICAL_REVIEW",
         },
         message="Demonstration PIN verified. Access granted for 20 minutes.",
     )
