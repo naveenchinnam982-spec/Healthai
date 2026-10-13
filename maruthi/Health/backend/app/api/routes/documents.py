@@ -13,8 +13,11 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from urllib.parse import quote
+
+import httpx
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -172,20 +175,42 @@ async def get_document_file(
     if not doc:
         raise HTTPException(404, detail={"code": "DOCUMENT_NOT_FOUND", "message": "Document not found"})
 
+    if doc.storage_path:
+        if not settings.supabase_url or not settings.supabase_service_role_key:
+            raise HTTPException(503, detail={"code": "STORAGE_NOT_CONFIGURED", "message": "Private Supabase Storage is not configured."})
+        encoded_path = quote(doc.storage_path, safe="/")
+        sign_url = f"{settings.supabase_url.rstrip('/')}/storage/v1/object/sign/medical-documents/{encoded_path}"
+        key = settings.supabase_service_role_key
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
+                response = await client.post(
+                    sign_url,
+                    json={"expiresIn": 60},
+                    headers={"apikey": key, "Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                )
+        except httpx.HTTPError as exc:
+            raise HTTPException(503, detail={"code": "STORAGE_UNAVAILABLE", "message": "Could not create a private file link."}) from exc
+        if response.status_code not in (200, 201):
+            raise HTTPException(502, detail={"code": "STORAGE_SIGN_FAILED", "message": "Could not create a private file link."})
+        signed_path = response.json().get("signedURL")
+        if not signed_path:
+            raise HTTPException(502, detail={"code": "STORAGE_SIGN_FAILED", "message": "Storage returned no signed URL."})
+        if signed_path.startswith("http://") or signed_path.startswith("https://"):
+            signed_url = signed_path
+        else:
+            signed_url = settings.supabase_url.rstrip("/") + "/storage/v1" + (signed_path if signed_path.startswith("/") else "/" + signed_path)
+        return RedirectResponse(url=signed_url, status_code=307)
+
+    # Local storage is a development/test fallback only. Production startup rejects it.
     patient_dir = Path(settings.storage_local_path) / doc.patient_id
     if not patient_dir.exists():
         raise HTTPException(404, detail={"code": "FILE_NOT_FOUND", "message": "File not found on storage"})
-
-    # Locate file starting with doc_id
     matching = [p for p in patient_dir.iterdir() if p.name.startswith(doc.id)]
     if not matching:
         raise HTTPException(404, detail={"code": "FILE_NOT_FOUND", "message": "File not found on storage"})
-
     file_path = matching[0]
     media_type = "application/pdf" if file_path.suffix.lower() == ".pdf" else "image/jpeg" if file_path.suffix.lower() in [".jpg", ".jpeg"] else "image/png" if file_path.suffix.lower() == ".png" else "application/octet-stream"
-
     return FileResponse(path=str(file_path), media_type=media_type, filename=doc.file_name or file_path.name)
-
 
 @router.post("/documents/{document_id}/review", response_model=APIResponse[DocumentOut])
 async def review_document(
