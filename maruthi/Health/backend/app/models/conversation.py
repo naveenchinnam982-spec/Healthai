@@ -35,6 +35,7 @@ class Conversation(Base):
     )
     title: Mapped[str] = mapped_column(String(255), default="Health Conversation", nullable=False)
     language: Mapped[str] = mapped_column(String(10), default="en", nullable=False)
+    language: Mapped[str] = mapped_column(String(10), default="en", nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
@@ -66,11 +67,17 @@ class Message(Base):
     )
 
     role: Mapped[str] = mapped_column(String(20), nullable=False)  # user, assistant, system
+    patient_id: Mapped[str] = mapped_column(String(36), ForeignKey("patients.id", ondelete="CASCADE"), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
+    intent: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    language: Mapped[str] = mapped_column(String(10), default="en", nullable=False)
     intent: Mapped[str | None] = mapped_column(String(50), nullable=True)
     language: Mapped[str] = mapped_column(String(10), default="en", nullable=False)
 
     citations_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    safety_status: Mapped[str] = mapped_column(String(50), default="SAFE", nullable=False)
+    uncertainty_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    provider: Mapped[str | None] = mapped_column(String(50), default="grounded_records_engine", nullable=True)
     safety_status: Mapped[str] = mapped_column(String(50), default="SAFE", nullable=False)
     uncertainty_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     provider: Mapped[str | None] = mapped_column(String(50), default="grounded_records_engine", nullable=True)
