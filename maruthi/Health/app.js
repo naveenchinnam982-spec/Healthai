@@ -2763,39 +2763,26 @@ function openNotificationsDrawer() {
   const content = document.getElementById('notifications-drawer-content');
   if (!modal || !content) return;
 
+  const items = (STATE.demoPreview ? DEMO_RAMESH_DATA.changes : STATE.changes)
+    .filter(change => ["REVIEW", "PENDING", "INCOMPLETE", "NEEDS_REVIEW"].includes(String(change.status || "").toUpperCase()));
   content.innerHTML = `
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;">
       <h2 style="font-size:18px;font-weight:700;margin:0;">Needs Attention</h2>
       <button class="btn-icon" onclick="closeNotificationsDrawer()">${getIcon('close', 'width:18px;height:18px;')}</button>
     </div>
-
-    <div style="display:flex;flex-direction:column;gap:12px;">
-      <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:var(--r-lg);padding:14px;">
-        <div style="font-size:13px;font-weight:700;color:#92400e;">1. Aspirin 75mg Review Pending</div>
-        <div style="font-size:12px;color:#78350f;margin-top:4px;">New prescription from 20 Jun 2026. Needs review with Dr. Sharma.</div>
-        <button class="btn btn-sm" style="background:#d97706;color:white;margin-top:10px;font-size:11px;" onclick="closeNotificationsDrawer(); openChangeDetail('chg-002');">
-          Review with Doctor
-        </button>
+    ${items.length ? `
+      <div style="display:flex;flex-direction:column;gap:12px;">
+        ${items.map((item, index) => `
+          <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:var(--r-lg);padding:14px;">
+            <div style="font-size:13px;font-weight:700;color:#92400e;">${index + 1}. ${escapeHtml(item.title || item.field_name || 'Record needs review')}</div>
+            <div style="font-size:12px;color:#78350f;margin-top:4px;">${escapeHtml(item.reason || item.badgeText || 'Please review this record with your clinician.')}</div>
+            ${item.id ? `<button class="btn btn-sm" style="background:#d97706;color:white;margin-top:10px;font-size:11px;" onclick="closeNotificationsDrawer(); openChangeDetail('${escapeHtml(item.id)}');">Review record</button>` : ''}
+          </div>
+        `).join('')}
       </div>
-
-      <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:var(--r-lg);padding:14px;">
-        <div style="font-size:13px;font-weight:700;color:#991b1b;">2. Missing Lumbar Spine MRI</div>
-        <div style="font-size:12px;color:#7f1d1d;margin-top:4px;">Referenced in consultation notes, but image/report is missing.</div>
-        <button class="btn btn-sm" style="background:#dc2626;color:white;margin-top:10px;font-size:11px;" onclick="closeNotificationsDrawer(); openAddRecordFlow('SCAN');">
-          Upload Scan Report
-        </button>
-      </div>
-
-      <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:var(--r-lg);padding:14px;">
-        <div style="font-size:13px;font-weight:700;color:#166534;">3. September 2026 Follow-up</div>
-        <div style="font-size:12px;color:#14532d;margin-top:4px;">Repeat HbA1c and renal profile to check kidney safety on Metformin.</div>
-        <button class="btn btn-sm" style="background:#16a34a;color:white;margin-top:10px;font-size:11px;" onclick="closeNotificationsDrawer(); navigate('decision');">
-          View Decision Memory
-        </button>
-      </div>
-    </div>
+    ` : '<div style="padding:24px 12px;text-align:center;color:var(--text-secondary);">No records currently require attention.</div>'}
+    ${STATE.demoPreview ? '<p style="font-size:11px;color:#9a3412;margin-top:16px;">Synthetic preview data only.</p>' : ''}
   `;
-
   modal.classList.add('open');
 }
 
@@ -2808,44 +2795,40 @@ function openHospitalModal() {
   const modal = document.getElementById('hospital-modal');
   const sheet = document.getElementById('hospital-sheet');
   if (!modal || !sheet) return;
-
+  const hospitals = STATE.hospitals || [];
+  const visits = STATE.visits || [];
+  const documents = visits.flatMap(v => v.documents || []);
   sheet.innerHTML = `
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
       <h2 style="font-size:19px;font-weight:700;color:var(--text-primary);margin:0;">Hospital Overview</h2>
       <button class="btn-icon" onclick="closeHospitalModal()">${getIcon('close', 'width:18px;height:18px;')}</button>
     </div>
-
-    <div style="display:flex;align-items:center;gap:12px;padding:14px;background:var(--blue-light);border-radius:var(--r-xl);margin-bottom:16px;">
-      <div style="font-size:28px;">🏥</div>
-      <div>
-        <div style="font-size:16px;font-weight:700;color:var(--text-primary);">City Care Hospital, Chennai</div>
-        <div style="font-size:12px;color:var(--text-secondary);">3 visits recorded · 5 connected documents</div>
+    ${hospitals.length ? hospitals.map(hospital => `
+      <div style="display:flex;align-items:center;gap:12px;padding:14px;background:var(--blue-light);border-radius:var(--r-xl);margin-bottom:16px;">
+        <div style="font-size:28px;">🏥</div>
+        <div>
+          <div style="font-size:16px;font-weight:700;color:var(--text-primary);">${escapeHtml(hospital.name)}</div>
+          <div style="font-size:12px;color:var(--text-secondary);">${hospital.visitCount || visits.filter(v => v.hospitalName === hospital.name).length} visits recorded · ${hospital.recordCount || documents.length} connected documents</div>
+        </div>
       </div>
-    </div>
-
+    `).join('') : '<div style="padding:20px;text-align:center;color:var(--text-secondary);">No hospital visits have been recorded in your account yet.</div>'}
     <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:20px;">
       <div style="font-size:12px;font-weight:700;color:var(--text-tertiary);text-transform:uppercase;">Visits on Record</div>
-      ${STATE.visits.map(v => `
+      ${visits.length ? visits.map(v => `
         <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:var(--r-md);padding:12px 14px;">
           <div style="display:flex;justify-content:space-between;font-size:13px;font-weight:600;">
-            <span>${v.date}</span>
-            <span style="color:var(--blue);">${v.doctorName}</span>
+            <span>${escapeHtml(v.date || 'Date not recorded')}</span>
+            <span style="color:var(--blue);">${escapeHtml(v.doctorName || 'Clinician not recorded')}</span>
           </div>
-          <div style="font-size:12px;color:var(--text-secondary);margin-top:4px;">${v.summary}</div>
+          <div style="font-size:12px;color:var(--text-secondary);margin-top:4px;">${escapeHtml(v.summary || v.type || 'Visit details not recorded')}</div>
         </div>
-      `).join('')}
+      `).join('') : '<div style="font-size:12px;color:var(--text-secondary);">No visits found.</div>'}
     </div>
-
     <div style="display:flex;gap:10px;">
-      <button class="btn btn-secondary btn-full" onclick="closeHospitalModal(); navigate('records');">
-        View All Records
-      </button>
-      <button class="btn btn-primary btn-full" onclick="closeHospitalModal(); openAddRecordFlow();">
-        Add Record
-      </button>
+      <button class="btn btn-secondary btn-full" onclick="closeHospitalModal(); navigate('records');">View Medical Records</button>
     </div>
+    ${STATE.demoPreview ? '<p style="font-size:11px;color:#9a3412;margin-top:16px;">Synthetic preview data only.</p>' : ''}
   `;
-
   modal.classList.add('open');
 }
 
