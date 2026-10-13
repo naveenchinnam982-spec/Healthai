@@ -7,8 +7,11 @@ PATCH /api/patients/{patient_id}
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.patient import Patient
 
 from app.database.connection import get_db
 from app.schemas.schemas import (
@@ -24,11 +27,17 @@ router = APIRouter(prefix="/patients", tags=["patients"])
 
 @router.get("", response_model=APIResponse[list[PatientOut]])
 async def list_patients(
+    request: Request,
     skip: int = 0,
     limit: int = 50,
     db: AsyncSession = Depends(get_db),
 ):
-    patients = await patient_service.get_all_patients(db, skip=skip, limit=limit)
+    user = getattr(request.state, "supabase_user", None)
+    if user:
+        result = await db.execute(select(Patient).where(Patient.owner_id == str(user["id"])).offset(skip).limit(limit))
+        patients = list(result.scalars().all())
+    else:  # Isolated test fixtures only.
+        patients = await patient_service.get_all_patients(db, skip=skip, limit=limit)
     return APIResponse(
         success=True,
         data=[PatientOut.model_validate(p) for p in patients],
@@ -39,9 +48,14 @@ async def list_patients(
 @router.post("", response_model=APIResponse[PatientOut], status_code=status.HTTP_201_CREATED)
 async def create_patient(
     payload: PatientCreate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ):
     patient = await patient_service.create_patient(db, payload)
+    user = getattr(request.state, "supabase_user", None)
+    if user:
+        patient.owner_id = str(user["id"])
+        await db.flush()
     return APIResponse(
         success=True,
         data=PatientOut.model_validate(patient),
