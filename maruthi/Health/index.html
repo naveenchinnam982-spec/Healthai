@@ -13,16 +13,9 @@
 </head>
 <body>
   <div id="app"></div>
-  <!-- Official Firebase SDK (v10 Compat) -->
-  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-storage-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-analytics-compat.js"></script>
-
-  <!-- Firebase Configuration & Service -->
-  <script src="firebase-config.js"></script>
-  <script src="firebase-service.js"></script>
+  <!-- Supabase browser client: URL and anon key are provided at runtime by Vercel -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="supabase-client.js"></script>
 
   <!-- API client and Application -->
   <script src="api.js"></script>
