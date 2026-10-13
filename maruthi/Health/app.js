@@ -1346,34 +1346,8 @@ async function handleLoginSubmit() {
 
 async function handleGoogleLogin() {
   const btn = document.getElementById('btn-google-auth');
-  setAuthLoading(btn, true, 'Connecting Google...');
-
-  try {
-    if (window.FirebaseService && typeof window.FirebaseService.signInWithGoogle === 'function') {
-      try {
-        const result = await window.FirebaseService.signInWithGoogle();
-        const user = result.user;
-        const res = await window.API.googleAuth(user.email, user.displayName, user.uid);
-        if (res?.success && res.data) {
-          await handleAuthSuccess(res.data, true);
-          return;
-        }
-      } catch (fbErr) {
-        console.warn('Firebase Google Auth popup skipped or unavailable, using fallback:', fbErr);
-      }
-    }
-
-    const res = await window.API.googleAuth('ramesh.kumar@synthetic.example', 'Ramesh Kumar');
-    if (res?.success && res.data) {
-      await handleAuthSuccess(res.data, true);
-    } else {
-      showAuthError('Google sign in could not be completed.');
-      setAuthLoading(btn, false, 'Continue with Google');
-    }
-  } catch (err) {
-    showAuthError(err.message || 'Google authentication failed.');
-    setAuthLoading(btn, false, 'Continue with Google');
-  }
+  showAuthError('Google sign-in is not configured yet. Please use email and password.');
+  setAuthLoading(btn, false, 'Continue with Google');
 }
 
 async function handleQuickDemoLogin() {
@@ -1458,10 +1432,8 @@ async function handleLogout() {
     localStorage.removeItem('hc_auth_user');
     localStorage.removeItem('hc_patient_id');
   } catch (e) {}
-  if (window.FirebaseService) {
-    try { await window.FirebaseService.signOut(); } catch (e) {}
-  }
-  loadPatientData({ id: '', name: '', email: '', uhid: '' });
+  try { localStorage.removeItem('hc_access_token'); } catch (e) {}
+loadPatientData({ id: '', name: '', email: '', uhid: '' });
   closeProfileDrawer();
   navigate('login');
 }

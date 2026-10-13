@@ -122,30 +122,20 @@ from fastapi.staticfiles import StaticFiles
 FRONTEND_DIR = Path(__file__).resolve().parent.parent.parent  # .../maruthi/Health
 MARUTHI_ROOT = FRONTEND_DIR.parent                             # .../maruthi
 WORKSPACE_ROOT = MARUTHI_ROOT.parent                          # .../Downloads/maruthi
-DOCTOR_DIST_DIR = WORKSPACE_ROOT / "doctorsdashboard-main" / "dist"
-PORTAL_PATH = MARUTHI_ROOT / "healthcontinuum.html"
-
 NO_CACHE_HEADERS = {
     "Cache-Control": "no-cache, no-store, must-revalidate",
     "Pragma": "no-cache",
     "Expires": "0",
 }
 
-# Mount doctor dashboard assets if built
-if (DOCTOR_DIST_DIR / "assets").exists():
-    app.mount("/doctor/assets", StaticFiles(directory=str(DOCTOR_DIST_DIR / "assets")), name="doctor_assets")
-
+# Mount patient app assets if present
 if (FRONTEND_DIR / "assets").exists():
     app.mount("/patient/assets", StaticFiles(directory=str(FRONTEND_DIR / "assets")), name="patient_assets")
 
 
 @app.get("/assets/{file_path:path}", include_in_schema=False)
 async def serve_root_assets(file_path: str):
-    # Check doctor dist assets first
-    doc_asset = DOCTOR_DIST_DIR / "assets" / file_path
-    if doc_asset.exists():
-        media_type = "text/css" if file_path.endswith(".css") else ("application/javascript" if file_path.endswith(".js") else None)
-        return FileResponse(doc_asset, media_type=media_type, headers=NO_CACHE_HEADERS)
+    # Serve patient app assets only
     # Check patient assets
     patient_asset = FRONTEND_DIR / "assets" / file_path
     if patient_asset.exists():
@@ -154,22 +144,14 @@ async def serve_root_assets(file_path: str):
 
 
 
-# ── Unified Portal (Landing Page) ─────────────────────────────────────────────
+# ── Patient App Landing Page ───────────────────────────────────────────────────
 @app.get("/", include_in_schema=False)
 @app.get("/portal", include_in_schema=False)
-async def serve_unified_portal():
-    if PORTAL_PATH.exists():
-        return FileResponse(PORTAL_PATH, media_type="text/html", headers=NO_CACHE_HEADERS)
+async def serve_patient_landing():
     index_path = FRONTEND_DIR / "index.html"
     if index_path.exists():
-        return FileResponse(index_path, headers=NO_CACHE_HEADERS)
-    return {
-        "app": "HealthContinuum AI",
-        "docs": "/api/docs",
-        "health": "/api/health",
-        "patient": "/patient",
-        "doctor": "/doctor",
-    }
+        return FileResponse(index_path, media_type="text/html", headers=NO_CACHE_HEADERS)
+    return JSONResponse(status_code=404, content={"message": "Patient app not found"})
 
 
 # ── Patient App Routes ────────────────────────────────────────────────────────
@@ -180,19 +162,6 @@ async def serve_patient_app(full_path: str = ""):
     if index_path.exists():
         return FileResponse(index_path, media_type="text/html", headers=NO_CACHE_HEADERS)
     return JSONResponse(status_code=404, content={"message": "Patient app not found"})
-
-
-# ── Doctor Dashboard Routes (SPA) ─────────────────────────────────────────────
-@app.get("/doctor", include_in_schema=False)
-@app.get("/doctor/{full_path:path}", include_in_schema=False)
-async def serve_doctor_dashboard(full_path: str = ""):
-    doctor_index = DOCTOR_DIST_DIR / "index.html"
-    if doctor_index.exists():
-        return FileResponse(doctor_index, media_type="text/html", headers=NO_CACHE_HEADERS)
-    return JSONResponse(
-        status_code=404,
-        content={"message": "Doctor dashboard dist bundle not found. Please run 'npm run build' in doctorsdashboard-main directory."},
-    )
 
 
 # ── Direct Patient App Static Assets ──────────────────────────────────────────
@@ -209,25 +178,5 @@ async def serve_app_js():
 @app.get("/api.js", include_in_schema=False)
 async def serve_api_js():
     return FileResponse(FRONTEND_DIR / "api.js", media_type="application/javascript", headers=NO_CACHE_HEADERS)
-
-
-@app.get("/firebase-config.js", include_in_schema=False)
-async def serve_firebase_config_js():
-    return FileResponse(FRONTEND_DIR / "firebase-config.js", media_type="application/javascript", headers=NO_CACHE_HEADERS)
-
-
-@app.get("/firebase-service.js", include_in_schema=False)
-async def serve_firebase_service_js():
-    return FileResponse(FRONTEND_DIR / "firebase-service.js", media_type="application/javascript", headers=NO_CACHE_HEADERS)
-
-
-@app.get("/firebase-config.json", include_in_schema=False)
-async def serve_firebase_config_json():
-    return FileResponse(FRONTEND_DIR / "firebase-config.json", media_type="application/json", headers=NO_CACHE_HEADERS)
-
-
-@app.get("/verify-firebase.html", include_in_schema=False)
-async def serve_verify_firebase_html():
-    return FileResponse(FRONTEND_DIR / "verify-firebase.html", media_type="text/html", headers=NO_CACHE_HEADERS)
 
 
