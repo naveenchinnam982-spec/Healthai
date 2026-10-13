@@ -308,7 +308,7 @@ class VerifyAccessCodeOut(BaseModel):
     id: str
     patient_id: str
     doctor_name: str | None
-    requested_scopes: str | None
+    requested_scopes: list[str] = Field(default_factory=list)
     status: str
     expires_at: datetime
     purpose: str = "DEMO_PURPOSE_ONLY"
