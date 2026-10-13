@@ -4522,7 +4522,7 @@ function renderDoctorAccess() {
   if (!container) return;
 
   const access = STATE.doctorAccess || {};
-  const { code = "", expiresInSeconds = 0, status = "NONE", purpose = "DEMO_PURPOSE_ONLY", isRevoked = false, pendingRequest = null } = access;
+  const { code = "", expiresInSeconds = 0, status = "NONE", purpose = "PATIENT_APPROVED_CLINICAL_REVIEW", isRevoked = false, pendingRequest = null } = access;
   const hasCode = Boolean(code && code !== "------");
   const isExpired = status === "EXPIRED" || (hasCode && expiresInSeconds <= 0 && !isRevoked);
   const minutes = Math.floor(Math.max(0, expiresInSeconds) / 60);
@@ -4551,7 +4551,7 @@ function renderDoctorAccess() {
         </button>
         <div>
           <h1 style="font-size:18px;font-weight:700;color:var(--text-primary);margin:0;">Share with Doctor</h1>
-          <div style="font-size:11px;color:var(--text-secondary);">20-minute temporary demonstration access</div>
+          <div style="font-size:11px;color:var(--text-secondary);">20-minute patient-approved temporary access</div>
         </div>
       </div>
       <span style="font-size:11px;font-weight:700;color:${badgeColor};background:${badgeBg};padding:3px 8px;border-radius:12px;text-transform:uppercase;letter-spacing:0.5px;">
@@ -4569,7 +4569,7 @@ function renderDoctorAccess() {
         </div>
 
         <div style="font-size:12px;font-weight:700;color:var(--text-tertiary);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;">
-          DEMO ACCESS PIN
+          PATIENT-APPROVED ACCESS PIN
         </div>
 
         <div class="code-box-display" style="font-size:36px;font-weight:800;letter-spacing:6px;color:var(--text-primary);font-family:monospace;padding:12px 16px;background:var(--bg-card-alt);border-radius:var(--r-xl);margin:8px auto 14px;max-width:240px;border:1px dashed var(--separator);">
@@ -4612,13 +4612,13 @@ function renderDoctorAccess() {
       <!-- Demonstration Access Rules Info Card -->
       <div style="margin-top:16px;padding:16px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:var(--r-xl);">
         <div style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:700;color:#1e293b;margin-bottom:6px;">
-          <span>🔒</span> Safe Demonstration Rules
+          <span>🔒</span> Patient-approved Access Rules
         </div>
         <ul style="margin:0;padding-left:18px;font-size:12px;color:#475569;line-height:1.6;">
           <li>Valid for exactly <strong>20 minutes</strong> from generation.</li>
-          <li>Grants read-only demonstration view of medications, lab results, and documents.</li>
+          <li>Grants read-only access only to the scopes authorized by the patient.</li>
           <li>Can be revoked by you at any time before expiry.</li>
-          <li>All access attempts and reviews are securely audited.</li>
+          <li>Access attempts and reviews are recorded in the audit log.</li>
         </ul>
       </div>
 
@@ -4677,7 +4677,7 @@ async function generateNewAccessCode() {
     return;
   }
 
-  const result = await window.API.generateDemoPin(patientId);
+  const result = await window.API.generateAccessPin(patientId);
   if (!result?.success || !result.data?.access_code || !result.data?.id) {
     alert(result?.error?.message || "The server could not create an access PIN. No PIN was generated.");
     return;
@@ -4710,7 +4710,7 @@ async function revokeCurrentPin() {
     alert("There is no server-issued access PIN to revoke.");
     return;
   }
-  const result = await window.API.revokeDemoPin(accessId, patientId);
+  const result = await window.API.revokeAccessPin(accessId, patientId);
   if (!result?.success) {
     alert(result?.error?.message || "The server could not revoke this PIN.");
     return;
