@@ -55,6 +55,8 @@ async def lifespan(app: FastAPI):
             raise RuntimeError("Production requires DATABASE_URL pointing to Supabase PostgreSQL; SQLite is not allowed.")
         if not settings.supabase_url or not settings.supabase_anon_key:
             raise RuntimeError("Production requires SUPABASE_URL and SUPABASE_ANON_KEY for Supabase Auth verification.")
+        if settings.storage_backend.lower() != "supabase" or not settings.supabase_service_role_key:
+            raise RuntimeError("Production requires STORAGE_BACKEND=supabase and a server-only SUPABASE_SERVICE_ROLE_KEY.")
         if settings.debug:
             raise RuntimeError("DEBUG must be false in production.")
         if not settings.allowed_origins or any(origin == "null" or origin.startswith("http://localhost") or origin.startswith("http://127.0.0.1") for origin in settings.cors_origins):
