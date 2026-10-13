@@ -319,7 +319,7 @@ const API = {
     apiFetch(`/patients/${id}/conversations/${convId}/messages`),
 
   /** POST /doctor-access/generate (Patient generates 20-minute demonstration PIN) */
-  generateDemoPin: async (patientId = getActivePatientId(), scopes = ["medical_history", "medications", "reports", "changes", "documents"], doctorName = null) => {
+  generateAccessPin: async (patientId = getActivePatientId(), scopes = ["medical_history", "medications", "reports", "changes", "documents"], doctorName = null) => {
     return apiFetch('/doctor-access/generate', {
       method: 'POST',
       body: JSON.stringify({
@@ -331,7 +331,7 @@ const API = {
   },
 
   /** POST /doctor-access/revoke (Patient or doctor revokes demonstration PIN) */
-  revokeDemoPin: async (accessId, patientId = getActivePatientId()) => {
+  revokeAccessPin: async (accessId, patientId = getActivePatientId()) => {
     return apiFetch('/doctor-access/revoke', {
       method: 'POST',
       body: JSON.stringify({
