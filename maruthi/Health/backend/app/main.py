@@ -4,6 +4,7 @@ HealthContinuum AI — FastAPI Application Entry Point
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 
 from pathlib import Path
@@ -50,7 +51,7 @@ async def lifespan(app: FastAPI):
     """Startup: create tables. Shutdown: clean up."""
     logger.info("Starting HealthContinuum AI backend...")
     if settings.app_env.lower() in {"production", "prod"}:
-        if not settings.database_url.startswith(("postgresql+asyncpg://", "postgresql://")):
+        if not settings.database_url.startswith("postgresql+asyncpg://"):
             raise RuntimeError("Production requires DATABASE_URL pointing to Supabase PostgreSQL; SQLite is not allowed.")
         if not settings.supabase_url or not settings.supabase_anon_key:
             raise RuntimeError("Production requires SUPABASE_URL and SUPABASE_ANON_KEY for Supabase Auth verification.")
