@@ -7,9 +7,13 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import DateTime, String, Text
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database.connection import Base
+
+
+OWNER_ID_TYPE = String(36).with_variant(PG_UUID(as_uuid=False), "postgresql")
 
 
 def _now() -> datetime:
@@ -24,6 +28,7 @@ class Patient(Base):
     __tablename__ = "patients"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    owner_id: Mapped[str | None] = mapped_column(OWNER_ID_TYPE, nullable=True, index=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     date_of_birth: Mapped[str | None] = mapped_column(String(20), nullable=True)
     gender: Mapped[str | None] = mapped_column(String(20), nullable=True)
