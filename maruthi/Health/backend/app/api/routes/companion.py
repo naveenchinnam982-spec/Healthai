@@ -7,6 +7,7 @@ GET  /api/patients/{patient_id}/conversations/{conversation_id}/messages
 """
 from __future__ import annotations
 
+import json
 from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -223,7 +224,7 @@ async def get_conversation_messages(
             content=m.content,
             intent=m.intent,
             language=m.language,
-            citations=m.citations,
+            citations=(json.loads(m.citations_json) if m.citations_json else []),
             safety_status=m.safety_status,
             uncertainty_notes=m.uncertainty_notes,
             created_at=m.created_at,
