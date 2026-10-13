@@ -3574,13 +3574,20 @@ function handleFileSelected(event) {
 }
 
 function handleSimulatedPhoto() {
-  // Create an explicit mock prescription for camera test without pretending it's an uploaded file
-  executeUploadPipeline('camera_capture_prescription.jpg');
+  alert("Camera capture is not connected yet. Please select an actual PDF or image file.");
 }
 
 async function executeUploadPipeline(fileOrName) {
-  const isFileObj = (fileOrName instanceof File || fileOrName instanceof Blob);
-  const fileName = isFileObj ? fileOrName.name : String(fileOrName);
+  const isFileObj = (typeof File !== "undefined" && fileOrName instanceof File) || (typeof Blob !== "undefined" && fileOrName instanceof Blob);
+  if (window.DEMO_PREVIEW || STATE.demoPreview) {
+    alert("Demo preview is read-only. Sign in to upload a medical document.");
+    return;
+  }
+  if (!isFileObj || !STATE.patient?.id) {
+    alert("Sign in and select a real PDF or image file before uploading.");
+    return;
+  }
+  const fileName = fileOrName.name || "medical-document";
 
   STATE.addRecordFlow.uploadedFile = isFileObj ? fileOrName : null;
   STATE.addRecordFlow.uploadedFileName = fileName;
@@ -3606,15 +3613,15 @@ async function executeUploadPipeline(fileOrName) {
         visit_id: STATE.addRecordFlow.selectedVisit || null,
         document_type: STATE.addRecordFlow.selectedType || null,
       };
-      uploadRes = await window.API.uploadDocument(STATE.patient?.id || 'pat-ramesh-001', payload);
+      uploadRes = await window.API.uploadDocument(STATE.patient.id, payload);
     }
 
     if (uploadRes && uploadRes.success && uploadRes.data) {
       const doc = uploadRes.data;
       STATE.addRecordFlow.uploadedDocId = doc.id;
       STATE.addRecordFlow.selectedType = doc.document_type || STATE.addRecordFlow.selectedType;
-      STATE.addRecordFlow.confidenceScore = doc.confidence_score != null ? doc.confidence_score : 0.88;
-      STATE.addRecordFlow.processingStatus = doc.processing_status || 'PROCESSED';
+      STATE.addRecordFlow.confidenceScore = doc.confidence_score ?? null;
+      STATE.addRecordFlow.processingStatus = doc.processing_status || 'PENDING';
       STATE.addRecordFlow.extractedData = doc.parsed_data || {};
       STATE.addRecordFlow.rawText = doc.extracted_text || '';
 
@@ -3629,32 +3636,27 @@ async function executeUploadPipeline(fileOrName) {
       }, 700);
 
     } else {
-      // Real extraction error handling — NEVER substitute fake demo data silently!
       console.warn('[Upload] Backend response unsuccessful:', uploadRes);
+      STATE.addRecordFlow.processingStatus = 'FAILED';
+      STATE.addRecordFlow.confidenceScore = null;
+      STATE.addRecordFlow.extractedData = null;
       if (s1) {
         s1.className = 'processing-step-row pending';
         s1.style.color = '#ef4444';
-        s1.innerHTML = `<span>✕</span> <span>Extraction issue: ${escapeHtml(uploadRes?.error?.message || 'Server error')}</span>`;
+        s1.innerHTML = `<span>✕</span> <span>Upload failed: ${escapeHtml(uploadRes?.error?.message || 'Server error')}</span>`;
       }
-      setTimeout(() => {
-        STATE.addRecordFlow.step = 6;
-        STATE.addRecordFlow.confidenceScore = 0.30;
-        STATE.addRecordFlow.extractedData = {
-          document_title: fileName,
-          review_issues: [{ field: 'upload', issue: 'Could not connect to processing service. Please enter fields manually.', severity: 'warning' }]
-        };
-        renderAddRecordStep();
-      }, 900);
+      alert(uploadRes?.error?.message || 'The server could not process this upload. Nothing was saved.');
+      STATE.addRecordFlow.step = 4;
+      renderAddRecordStep();
     }
   } catch (err) {
     console.error('[Upload] Pipeline error:', err);
-    STATE.addRecordFlow.step = 6;
-    STATE.addRecordFlow.confidenceScore = 0.20;
-    STATE.addRecordFlow.extractedData = {
-      document_title: fileName,
-      review_issues: [{ field: 'upload', issue: `Upload error: ${err.message}. Please enter details manually.`, severity: 'warning' }]
-    };
+    STATE.addRecordFlow.processingStatus = 'FAILED';
+    STATE.addRecordFlow.confidenceScore = null;
+    STATE.addRecordFlow.extractedData = null;
+    STATE.addRecordFlow.step = 4;
     renderAddRecordStep();
+    alert(`Upload failed: ${err.message || 'Unable to reach the processing service'}. Nothing was saved.`);
   }
 }
 
