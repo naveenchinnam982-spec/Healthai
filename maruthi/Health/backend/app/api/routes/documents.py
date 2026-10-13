@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,6 +23,15 @@ from app.schemas.schemas import APIResponse, DocumentCreate, DocumentOut, Docume
 from app.services import document_service, patient_service
 
 router = APIRouter(tags=["documents"])
+
+async def _get_patient_for_request(request: Request, db: AsyncSession, patient_id: str):
+    patient = await _get_patient_for_request(request, db, patient_id)
+    if settings.app_env.lower() not in {"test", "testing"}:
+        user = getattr(request.state, "supabase_user", None)
+        if not user or str(patient.owner_id or "") != str(user.get("id")):
+            raise HTTPException(403, detail={"code": "PATIENT_ACCESS_DENIED", "message": "You do not own this patient's records."})
+    return patient
+
 
 
 @router.get(
@@ -57,6 +66,7 @@ async def list_documents(
 )
 async def upload_document_patient(
     patient_id: str,
+    request: Request,
     file: UploadFile = File(...),
     document_type: str | None = Form(None),
     visit_id: str | None = Form(None),
@@ -94,8 +104,9 @@ async def upload_document_patient(
     status_code=status.HTTP_201_CREATED,
 )
 async def upload_document_generic(
+    request: Request,
     file: UploadFile = File(...),
-    patient_id: str = Form("pat-ramesh-001"),
+    patient_id: str = Form(...)
     document_type: str | None = Form(None),
     visit_id: str | None = Form(None),
     db: AsyncSession = Depends(get_db),
@@ -103,6 +114,7 @@ async def upload_document_generic(
     """Multipart document upload with patient_id in form."""
     return await upload_document_patient(
         patient_id=patient_id,
+        request=request,
         file=file,
         document_type=document_type,
         visit_id=visit_id,
