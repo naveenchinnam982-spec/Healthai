@@ -114,6 +114,11 @@ async def bootstrap_profile(
 ):
     """Idempotently create/load the patient profile for the verified Supabase user."""
     user = _verified_user(request)
+    if db.bind and db.bind.dialect.name == "postgresql":
+        role_result = await db.execute(text("SELECT role FROM public.profiles WHERE id = :id"), {"id": str(user["id"])})
+        existing_role = role_result.scalar_one_or_none()
+        if existing_role and existing_role != "patient":
+            raise HTTPException(status_code=403, detail={"code": "PATIENT_ROLE_REQUIRED", "message": "This account is not registered as a patient account."})
     patient = await _get_or_create_patient(db, user, payload)
     authorization = request.headers.get("Authorization", "")
     token = authorization.partition(" ")[2] if authorization.lower().startswith("bearer ") else ""
