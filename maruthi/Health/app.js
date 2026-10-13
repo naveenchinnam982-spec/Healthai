@@ -349,7 +349,7 @@ let STATE = {
   visits: [],
   changes: [],
   decisionMemory: null,
-  doctorAccess: { code: null, expiresInSeconds: 0, timerId: null, status: "NONE", pendingRequest: { doctorName: "", hospital: "", scope: "", requestedAt: "" } },
+  doctorAccess: { code: null, expiresInSeconds: 0, timerId: null, status: "NONE", pendingRequest: null },
   voiceCompanion: { state: "idle", speechEnabled: true, recognition: null, currentTranscript: "", currentDraft: "", chatHistory: [], lastSpokenText: "" },
   addRecordFlow: { step: 1, selectedType: "PRESCRIPTION", selectedHospital: "", selectedVisit: "", uploadedFileName: "", extractedData: null },
   conflicts: [],
@@ -367,7 +367,7 @@ function loadPatientData(patient = {}) {
     STATE.conflicts = [];
     STATE.historicalMetrics = {};
     STATE.voiceCompanion.chatHistory = [];
-    STATE.doctorAccess = { code: null, expiresInSeconds: 0, timerId: null, status: "NONE", pendingRequest: { doctorName: "", hospital: "", scope: "", requestedAt: "" } };
+    STATE.doctorAccess = { code: null, expiresInSeconds: 0, timerId: null, status: "NONE", pendingRequest: null };
     STATE.demoPreview = false;
     if (typeof window !== "undefined") window.PATIENT_ID = "";
     return;
@@ -383,7 +383,7 @@ function loadPatientData(patient = {}) {
     STATE.conflicts = JSON.parse(JSON.stringify(DEMO_RAMESH_DATA.conflicts));
     STATE.historicalMetrics = JSON.parse(JSON.stringify(DEMO_RAMESH_DATA.historicalMetrics));
     STATE.voiceCompanion.chatHistory = JSON.parse(JSON.stringify(DEMO_RAMESH_DATA.voiceCompanion.chatHistory));
-    STATE.doctorAccess = { code: null, expiresInSeconds: 0, timerId: null, status: "PREVIEW", pendingRequest: { doctorName: "", hospital: "", scope: "", requestedAt: "" } };
+    STATE.doctorAccess = { code: null, expiresInSeconds: 0, timerId: null, status: "PREVIEW", pendingRequest: null };
     STATE.demoPreview = true;
   } else {
     const name = patient.name || "Patient";
@@ -414,7 +414,7 @@ function loadPatientData(patient = {}) {
       source: null,
       provider: "Dr. Anya AI",
     }];
-    STATE.doctorAccess = { code: null, expiresInSeconds: 0, timerId: null, status: "NONE", pendingRequest: { doctorName: "", hospital: "", scope: "", requestedAt: "" } };
+    STATE.doctorAccess = { code: null, expiresInSeconds: 0, timerId: null, status: "NONE", pendingRequest: null };
     STATE.demoPreview = false;
   }
 
@@ -4522,15 +4522,16 @@ function renderDoctorAccess() {
   if (!container) return;
 
   const access = STATE.doctorAccess || {};
-  const { code = '------', expiresInSeconds = 0, status = 'ACTIVE', purpose = 'DEMO PURPOSE ONLY', isRevoked = false, pendingRequest } = access;
-  const isExpired = expiresInSeconds <= 0 && !isRevoked;
+  const { code = "", expiresInSeconds = 0, status = "NONE", purpose = "DEMO_PURPOSE_ONLY", isRevoked = false, pendingRequest = null } = access;
+  const hasCode = Boolean(code && code !== "------");
+  const isExpired = status === "EXPIRED" || (hasCode && expiresInSeconds <= 0 && !isRevoked);
   const minutes = Math.floor(Math.max(0, expiresInSeconds) / 60);
   const seconds = Math.max(0, expiresInSeconds) % 60;
   const timeFormatted = `${minutes}:${seconds < 10 ? '0' : ''}${seconds}`;
 
   let badgeColor = '#2563eb';
   let badgeBg = '#eff6ff';
-  let statusText = 'ACTIVE · 20 MIN';
+  let statusText = hasCode && status === 'ACTIVE' ? 'ACTIVE · 20 MIN' : (status === 'PREVIEW' ? 'SAMPLE PREVIEW' : 'NO ACTIVE PIN');
   if (isRevoked) {
     badgeColor = '#dc2626';
     badgeBg = '#fef2f2';
@@ -4575,12 +4576,12 @@ function renderDoctorAccess() {
           ${isRevoked ? 'REVOKED' : (code || '------')}
         </div>
 
-        ${!isRevoked && !isExpired ? `
+        ${hasCode && !isRevoked && !isExpired && status === 'ACTIVE' ? `
           <div style="font-size:14px;color:var(--text-secondary);font-weight:500;">
             Expires in <strong style="color:var(--blue);font-family:monospace;font-size:16px;">${timeFormatted}</strong>
           </div>
           <div style="font-size:11px;color:var(--text-tertiary);margin-top:4px;">
-            Authoritative 20-minute server countdown
+            Server-verified 20-minute expiry
           </div>
         ` : ''}
 
@@ -4590,15 +4591,15 @@ function renderDoctorAccess() {
           </div>
         ` : ''}
 
-        ${isExpired && !isRevoked ? `
+        ${hasCode && isExpired && !isRevoked ? `
           <div style="font-size:13px;color:#d97706;font-weight:600;margin-top:4px;">
-            This demonstration PIN has expired. Generate a new PIN to grant access.
+            This PIN has expired. Generate a new PIN to request temporary access.
           </div>
         ` : ''}
 
         <div style="margin-top:18px;display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
           <button class="btn btn-primary btn-sm" onclick="generateNewAccessCode()">
-            ${getIcon('refresh', 'width:14px;height:14px;margin-right:4px;')} Generate Demo PIN
+            ${getIcon('refresh', 'width:14px;height:14px;margin-right:4px;')} Generate temporary PIN
           </button>
           ${!isRevoked && !isExpired && code && code !== '------' ? `
             <button class="btn btn-secondary btn-sm" style="color:#dc2626;border-color:#fecaca;" onclick="revokeCurrentPin()">
@@ -4621,7 +4622,7 @@ function renderDoctorAccess() {
         </ul>
       </div>
 
-      <!-- Access Request Approval Simulation -->
+      <!-- Access Request -->
       ${pendingRequest ? `
         <div style="margin-top:16px;background:#f0f5ff;border:1.5px solid rgba(37,99,235,0.2);border-radius:var(--r-xl);padding:18px;">
           <div style="font-size:11px;font-weight:700;color:var(--blue);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">
