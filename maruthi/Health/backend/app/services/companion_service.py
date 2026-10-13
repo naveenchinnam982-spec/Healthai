@@ -730,117 +730,98 @@ def handle_medication_query(records: dict[str, Any], query: str, language: str) 
 
 
 def handle_report_value_query(records: dict[str, Any], query: str, language: str) -> dict[str, Any]:
-    """
-    Scenario A: Explain latest report or specific test values.
-    Also handles requests for absent historical dates (Scenario E).
-    """
+    """List laboratory values as recorded; do not infer a diagnosis or target range."""
     labs: list[LabResult] = records.get("labs", [])
+    documents: list[Document] = records.get("documents", [])
     q_low = query.lower()
-
-    # Check if user asked about a specific month's report
-    months = ["january", "february", "march", "april", "may", "july", "august", "september", "october", "november", "december"]
-    requested_month = next((m for m in months if m in q_low), None)
+    month_aliases = {
+        1: ("january", "jan"), 2: ("february", "feb"), 3: ("march", "mar"),
+        4: ("april", "apr"), 5: ("may",), 6: ("june", "jun"),
+        7: ("july", "jul"), 8: ("august", "aug"), 9: ("september", "sep", "sept"),
+        10: ("october", "oct"), 11: ("november", "nov"), 12: ("december", "dec"),
+    }
+    requested_month = next((m for m, aliases in month_aliases.items() if any(re.search(r"\b" + re.escape(a) + r"\b", q_low) for a in aliases)), None)
+    filtered_labs = labs
     if requested_month:
-        month_num = {
-            "january": "01", "february": "02", "march": "03", "april": "04",
-            "may": "05", "july": "07", "august": "08", "september": "09",
-            "october": "10", "november": "11", "december": "12"
-        }[requested_month]
-        docs = records.get("documents", [])
-        month_labs = [l for l in labs if requested_month in (l.test_date or "").lower() or f"-{month_num}-" in (l.test_date or "")]
-        month_docs = [d for d in docs if requested_month in (d.file_name or "").lower() or requested_month in (d.extracted_text or "").lower()]
-        is_report_query = "report" in q_low or "document" in q_low or "pdf" in q_low
-        if (is_report_query and not month_docs) or (not month_labs and not month_docs):
-            if language == "te":
-                answer = f"నేను మీ అందుబాటులో ఉన్న రికార్డులను శోధించాను, కానీ {requested_month.capitalize()} నివేదిక ఏదీ కనుగొనబడలేదు. మీ రికార్డులలో ప్రస్తుతం జూన్ 2026 నాటి రికార్డులు మాత్రమే ఉన్నాయి."
-            else:
-                answer = f"I searched your accessible medical records and could not find any report from {requested_month.capitalize()}. Your uploaded records currently contain consultation notes, prescriptions, and lab panels from June 2026."
+        filtered_labs = [lab for lab in labs if f"-{requested_month:02d}-" in str(lab.test_date or "")]
+        if not filtered_labs:
+            month_name = month_aliases[requested_month][0].title()
+            answer = (
+                f"మీ రికార్డుల్లో {month_name} నెలకు సంబంధించిన ల్యాబ్ ఫలితాలు కనుగొనబడలేదు."
+                if language == "te"
+                else f"I could not find any laboratory results dated in {month_name} in your accessible records."
+            )
             return {
-                "answer": answer,
-                "intent": INTENT_INSUFFICIENT_EVIDENCE,
-                "safety_status": "INSUFFICIENT_EVIDENCE",
-                "citations": [],
-                "uncertainty_notes": f"{requested_month.capitalize()} report not found in patient's authorized documents.",
-                "suggested_next_actions": [f"Upload the {requested_month.capitalize()} report if you have the physical paper copy or PDF."],
-                "provider": "grounded_records_engine",
-                "provider_note": "Factual absence check: report not present in database.",
+                "answer": answer, "intent": INTENT_REPORT_VALUE_QUERY,
+                "safety_status": "INSUFFICIENT_EVIDENCE", "citations": [],
+                "uncertainty_notes": "No laboratory rows matched the requested month.",
+                "suggested_next_actions": ["Upload the relevant lab report if you have it."],
+                "provider": "grounded_records_engine", "provider_note": "No matching lab results were found.",
                 "documented_facts": [],
             }
 
-    if not labs:
-        if language == "te":
-            answer = "మీ రికార్డులలో ఎటువంటి ల్యాబ్ పరీక్ష ఫలితాలు కనుగొనబడలేదు."
-        else:
-            answer = "No laboratory test results were found in your accessible records."
+    if not filtered_labs:
+        answer = (
+            "మీ ఖాతాలో ల్యాబ్ ఫలితాలు ఇంకా నమోదు కాలేదు."
+            if language == "te"
+            else "No laboratory results are recorded in your accessible account yet."
+        )
         return {
-            "answer": answer,
-            "intent": INTENT_REPORT_VALUE_QUERY,
-            "safety_status": "INSUFFICIENT_EVIDENCE",
-            "citations": [],
-            "uncertainty_notes": "No lab results found.",
-            "suggested_next_actions": ["Upload lab report PDFs."],
-            "provider": "grounded_records_engine",
-            "provider_note": "No labs found.",
+            "answer": answer, "intent": INTENT_REPORT_VALUE_QUERY,
+            "safety_status": "INSUFFICIENT_EVIDENCE", "citations": [],
+            "uncertainty_notes": "No laboratory rows found.",
+            "suggested_next_actions": ["Upload a laboratory report if you have one."],
+            "provider": "grounded_records_engine", "provider_note": "No lab records found.",
             "documented_facts": [],
         }
 
-    # Gather latest unique tests
-    seen = set()
-    latest_tests: list[LabResult] = []
-    for l in labs:
-        k = l.test_name.strip().upper()
-        if k not in seen:
-            seen.add(k)
-            latest_tests.append(l)
+    latest_by_test: dict[str, LabResult] = {}
+    for lab in sorted(filtered_labs, key=lambda item: str(item.test_date or ""), reverse=True):
+        key = (lab.test_name or "").strip().lower()
+        if key and key not in latest_by_test:
+            latest_by_test[key] = lab
 
-    citations = [
-        build_citation(
-            title=f"Laboratory Report — {l.test_name}",
-            date=l.test_date,
-            doc_type="LAB_REPORT",
-            doc_id=l.source_document_id,
-            field_name=l.test_name,
-            value=f"{l.value} {l.unit or ''}",
-        )
-        for l in latest_tests[:4]
+    facts = []
+    citations = []
+    docs_by_id = {doc.id: doc for doc in documents}
+    seen_docs = set()
+    for lab in latest_by_test.values():
+        facts.append({
+            "test": lab.test_name or "Test name not recorded",
+            "value": lab.value if lab.value is not None else "Value not recorded",
+            "unit": lab.unit or "",
+            "reference_range": lab.reference_range or "",
+            "date": lab.test_date or "Date not recorded",
+        })
+        doc = docs_by_id.get(lab.source_document_id) if lab.source_document_id else None
+        if doc and doc.id not in seen_docs:
+            citations.append(build_citation(
+                title=doc.file_name or "Laboratory report",
+                date=doc.uploaded_at.strftime("%Y-%m-%d") if getattr(doc, "uploaded_at", None) else "Date not recorded",
+                doc_type=doc.document_type or "LAB_REPORT",
+                doc_id=doc.id,
+            ))
+            seen_docs.add(doc.id)
+
+    lines = [
+        f"• {item['test']}: {item['value']} {item['unit']} — reference range recorded: {item['reference_range'] or 'not provided'} — date: {item['date']}"
+        for item in facts
     ]
-
-    facts = [
-        f"{l.test_name}: {l.value} {l.unit or ''} (Ref: {l.reference_range or 'N/A'}, Date: {l.test_date})"
-        for l in latest_tests[:5]
-    ]
-    facts_str = "\n".join([f"• {f}" for f in facts])
-
-    if language == "te":
-        answer = (
-            f"🧪 మీ తాజా ల్యాబ్ నివేదిక ఫలితాలు (20 జూన్ 2026):\n\n{facts_str}\n\n"
-            "ల్యాబ్ ఫలితాల విశ్లేషణ:\n"
-            "1. HbA1c (6.5%): రక్తంలో చక్కెర నియంత్రణ అనుకూలమైన పరిధిలో ఉంది (లక్ష్యం < 7.0%).\n"
-            "2. eGFR (82 mL/min): మూత్రపిండాల వడపోత సామర్థ్యం మెరుగుపడింది (సాధారణం > 60).\n"
-            "3. సీరం క్రియాటినిన్ (0.9 mg/dL): సాధారణ పరిధిలో ఉంది (0.7–1.2 mg/dL).\n\n"
-            "ముఖ్య గమనిక: ఈ నివేదిక మీ రికార్డులలో నమోదైన వాస్తవాలు. ఇది వైద్యుని సంప్రదింపులకు ప్రత్యామ్నాయం కాదు."
-        )
-    else:
-        answer = (
-            f"🧪 Latest Laboratory Results (20 June 2026):\n\n{facts_str}\n\n"
-            "Report Breakdown:\n"
-            "1. HbA1c (6.5%): Glycaemic control is well within the recommended target (< 7.0%), reflecting sustained improvement.\n"
-            "2. eGFR (82 mL/min): Kidney filtration has improved stably (normal > 60 mL/min).\n"
-            "3. Serum Creatinine (0.9 mg/dL): Normal renal excretion (reference 0.7–1.2 mg/dL).\n\n"
-            "Clinical Safety Note: These values reflect your documented laboratory tests. Consult your physician for personalized medical advice."
-        )
-
+    facts_text = "\n".join(lines)
+    answer = (
+        f"మీ రికార్డుల్లో ఉన్న తాజా ల్యాబ్ విలువలు:\n\n{facts_text}\n\nఈ విలువలను మీ వైద్యుడు మీ ఆరోగ్య పరిస్థితి, మందులు మరియు ల్యాబ్ రిఫరెన్స్ పరిధితో కలిపి అర్థం చేసుకోవాలి."
+        if language == "te"
+        else f"Latest laboratory values recorded in your account:\n\n{facts_text}\n\nThese are transcribed record values, not a diagnosis. Ask your clinician to interpret them in context."
+    )
     return {
-        "answer": answer,
-        "intent": INTENT_REPORT_VALUE_QUERY,
-        "safety_status": "SAFE",
-        "citations": citations,
-        "uncertainty_notes": None,
-        "suggested_next_actions": ["Review with Dr. Priya Sharma during next regular check-up."],
-        "provider": "grounded_records_engine",
-        "provider_note": "Lab value extraction grounded in verified patient lab records.",
+        "answer": answer, "intent": INTENT_REPORT_VALUE_QUERY,
+        "safety_status": "SAFE", "citations": citations,
+        "uncertainty_notes": "Values and reference ranges are shown only when present in the stored record.",
+        "suggested_next_actions": ["Ask your clinician to interpret the values if you are concerned."],
+        "provider": "grounded_records_engine", "provider_note": "Laboratory values are taken from the patient's stored lab rows.",
         "documented_facts": facts,
     }
+
 
 
 def handle_uploaded_record_query(records: dict[str, Any], query: str, language: str) -> dict[str, Any]:
@@ -972,52 +953,69 @@ def handle_uploaded_record_query(records: dict[str, Any], query: str, language: 
     }
 
 
-def handle_journey_summary(records: dict[str, Any], language: str) -> dict[str, Any]:
-    """
-    Scenario: Summarize patient's documented journey over time.
-    """
-    patient: Patient = records.get("patient")
+def handle_journey_summary(records: dict[str, Any], query: str, language: str) -> dict[str, Any]:
+    """Summarize only visits, medicines, labs, documents, and changes actually stored."""
     visits: list[Visit] = records.get("visits", [])
-    meds: list[Medication] = records.get("medications", [])
+    medications: list[Medication] = records.get("medications", [])
     labs: list[LabResult] = records.get("labs", [])
+    documents: list[Document] = records.get("documents", [])
     changes: list[ChangeEvent] = records.get("changes", [])
+    active_meds = [m for m in medications if (m.status or "").upper() == "CURRENT"]
 
-    visit_cnt = len(visits)
-    current_meds = [m for m in meds if m.status == "CURRENT"]
+    if not any([visits, medications, labs, documents, changes]):
+        answer = (
+            "మీ ఖాతాలో ఇంకా వైద్య రికార్డులు లేవు. మీ ప్రిస్క్రిప్షన్‌లు లేదా ల్యాబ్ రిపోర్ట్‌లను అప్‌లోడ్ చేసిన తర్వాత మీ ఆరోగ్య ప్రయాణాన్ని ఇక్కడ చూడవచ్చు."
+            if language == "te"
+            else "Your account does not contain medical records yet. Upload a prescription, lab report, or visit summary to start your health timeline."
+        )
+        return {
+            "answer": answer, "intent": INTENT_JOURNEY_SUMMARY,
+            "safety_status": "INSUFFICIENT_EVIDENCE", "citations": [],
+            "uncertainty_notes": "No stored patient records were available for summarization.",
+            "suggested_next_actions": ["Upload a medical record to begin your timeline."],
+            "provider": "grounded_records_engine", "provider_note": "No patient records found.",
+            "documented_facts": [],
+        }
 
-    citations = [
-        build_citation("Health Continuity Audit Trail", "2026", "CLINICAL_NOTE", "doc-003"),
-        build_citation("Prescription Records", "2026", "PRESCRIPTION", "doc-004"),
+    latest_visit = max(visits, key=lambda item: str(item.visit_date or "")) if visits else None
+    latest_labs = sorted(labs, key=lambda item: str(item.test_date or ""), reverse=True)[:5]
+    facts = [
+        f"Recorded visits: {len(visits)}",
+        f"Active medication entries: {len(active_meds)}",
+        f"Laboratory result entries: {len(labs)}",
+        f"Documents: {len(documents)}",
+        f"Clinical changes: {len(changes)}",
     ]
+    if latest_visit:
+        facts.append(f"Latest visit date: {latest_visit.visit_date or 'Date not recorded'}; provider: {latest_visit.hospital_name or 'Not recorded'}")
+    if active_meds:
+        facts.append("Active medications: " + ", ".join(m.name for m in active_meds if m.name))
+    for lab in latest_labs:
+        facts.append(f"Latest recorded lab: {lab.test_name or 'Test'} = {lab.value if lab.value is not None else 'Value not recorded'} {lab.unit or ''} ({lab.test_date or 'Date not recorded'})")
 
-    if language == "te":
-        answer = (
-            f"📜 {patient.name} గారి ఆరోగ్య ప్రయాణ సారాంశం (Health Journey):\n\n"
-            f"• మొత్తం నమోదు చేయబడిన ఆసుపత్రి సందర్శనలు: {visit_cnt}\n"
-            f"• ప్రస్తుతం తీసుకుంటున్న మందులు: {', '.join(m.name for m in current_meds) if current_meds else 'ఏవీ లేవు'}\n"
-            f"• కీలక పురోగతి: రక్తంలో చక్కెర శాతం (HbA1c 6.5%) మరియు మూత్రపిండాల పనితీరు (eGFR 82 mL/min) మెరుగుపడ్డాయి.\n"
-            f"• పర్యవేక్షణ అంశాలు: ఆస్పిరిన్ 75 mg సమీక్ష మరియు లుంబార్ స్పైన్ MRI నివేదిక అప్‌లోడ్ బాకీ ఉన్నాయి."
-        )
-    else:
-        answer = (
-            f"📜 Health Continuum Journey Summary for {patient.name}:\n\n"
-            f"• Documented Visits: {visit_cnt} hospital encounters on record.\n"
-            f"• Active Medications: {', '.join(f'{m.name} {m.dosage}' for m in current_meds) if current_meds else 'None'}\n"
-            f"• Key Clinical Progression: Significant improvement in glycemic control (HbA1c 6.5%) and kidney function (eGFR 82 mL/min).\n"
-            f"• Actionable Continuum Items: Aspirin 75 mg review pending with Dr. Sharma, and lumbar spine MRI report pending upload."
-        )
-
+    citations = []
+    for doc in documents[:4]:
+        citations.append(build_citation(
+            title=doc.file_name or "Medical document",
+            date=doc.uploaded_at.strftime("%Y-%m-%d") if getattr(doc, "uploaded_at", None) else "Date not recorded",
+            doc_type=doc.document_type or "DOCUMENT",
+            doc_id=doc.id,
+        ))
+    facts_text = "\n".join("• " + fact for fact in facts)
+    answer = (
+        f"మీ ఖాతాలో నమోదు చేసిన ఆరోగ్య ప్రయాణ సారాంశం:\n\n{facts_text}\n\nఈ సారాంశం రికార్డుల సంఖ్యలు మరియు నమోదు చేసిన వివరాలను మాత్రమే చూపిస్తుంది; వైద్య నిర్ధారణ కాదు."
+        if language == "te"
+        else f"Summary of your recorded health timeline:\n\n{facts_text}\n\nThis summarizes stored entries only and is not an independent medical diagnosis."
+    )
     return {
-        "answer": answer,
-        "intent": INTENT_JOURNEY_SUMMARY,
-        "safety_status": "SAFE",
-        "citations": citations,
-        "uncertainty_notes": "Aggregated from verified patient records across all encounters.",
-        "suggested_next_actions": ["View the Interactive Timeline on the Home screen."],
-        "provider": "grounded_records_engine",
-        "provider_note": "Journey summary synthesized from database records.",
-        "documented_facts": [f"{visit_cnt} visits", f"{len(current_meds)} active meds"],
+        "answer": answer, "intent": INTENT_JOURNEY_SUMMARY,
+        "safety_status": "SAFE", "citations": citations,
+        "uncertainty_notes": "The summary cannot include records that have not been uploaded or linked to this account.",
+        "suggested_next_actions": ["Review any missing records with your clinician."] if changes else [],
+        "provider": "grounded_records_engine", "provider_note": "Summary derived from stored visits, medications, labs, documents, and changes.",
+        "documented_facts": facts,
     }
+
 
 
 def handle_general_health(query: str, language: str) -> dict[str, Any]:
@@ -1524,7 +1522,7 @@ async def generate_companion_response(
     if primary_source:
         source_obj = {
             "title": primary_source.get("title", "Clinical Record"),
-            "date": primary_source.get("date") or "20 June 2026",
+            "date": primary_source.get("date") or "Date not recorded",
             "type": primary_source.get("type", "RECORD"),
             "doc_id": primary_source.get("doc_id"),
         }
