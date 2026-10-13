@@ -37,7 +37,7 @@ from app.models.document import Document
 from app.models.change_event import ChangeEvent
 from app.models.doctor import Doctor
 from app.models.doctor_access import DoctorAccess, ReviewQueueItem
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("healthcontinuum")
