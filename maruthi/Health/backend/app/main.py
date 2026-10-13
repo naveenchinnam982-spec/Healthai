@@ -138,9 +138,32 @@ async def require_supabase_session_and_ownership(request: Request, call_next):
     user_id = str(user["id"])
 
     # The API uses a server-side PostgreSQL connection, which bypasses RLS. Enforce
-    # ownership here before any route can read or mutate a patient's records.
+    # account role and ownership here before any route can read or mutate records.
     try:
         async with AsyncSessionLocal() as db:
+            doctor_only = (
+                path in {"/api/doctor-access/verify", "/api/doctor-access/approve", "/api/doctor-access/grants", "/api/doctor-access/audit-events", "/api/doctor-access/review-action"}
+                or (path == "/api/doctor-access/review-queue" and request.method == "GET")
+                or path.startswith("/api/doctor-access/review-queue/")
+                or path.startswith("/api/doctor-access/permitted-records/")
+            )
+            patient_side_access = (
+                path in {"/api/doctor-access/generate", "/api/doctor-access/revoke"}
+                or (path == "/api/doctor-access/review-queue" and request.method == "POST")
+                or bool(re.match(r"^/api/doctor-access/[^/]+$", path))
+            )
+            if path != "/api/auth/profile":
+                role_result = await db.execute(text("SELECT role FROM public.profiles WHERE id = :id"), {"id": user_id})
+                role = role_result.scalar_one_or_none()
+                if doctor_only:
+                    if role != "doctor":
+                        return JSONResponse(status_code=403, content={"success": False, "error": {"code": "DOCTOR_ROLE_REQUIRED", "message": "A doctor-role Supabase profile is required."}})
+                elif path.startswith("/api/doctor-access/") and patient_side_access:
+                    if role != "patient":
+                        return JSONResponse(status_code=403, content={"success": False, "error": {"code": "PATIENT_ROLE_REQUIRED", "message": "A patient-role Supabase profile is required."}})
+                elif role != "patient":
+                    return JSONResponse(status_code=403, content={"success": False, "error": {"code": "PATIENT_ROLE_REQUIRED", "message": "A patient-role Supabase profile is required."}})
+
             patient_match = re.match(r"^/api/patients/([^/]+)(?:/.*)?$", path)
             if patient_match:
                 patient_id = unquote(patient_match.group(1))
