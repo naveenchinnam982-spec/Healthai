@@ -22,6 +22,7 @@ create unique index if not exists ux_doctor_accesses_code_hash on public.doctor_
 
 alter table public.review_queue_items add column if not exists doctor_id text;
 alter table public.review_queue_items add column if not exists access_id text;
+alter table public.review_queue_items add column if not exists document_name text;
 alter table public.review_queue_items add column if not exists item_type text not null default 'PRESCRIPTION_HANDWRITING';
 alter table public.review_queue_items add column if not exists field_name text;
 alter table public.review_queue_items add column if not exists candidate_value text;
