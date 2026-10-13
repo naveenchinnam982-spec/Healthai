@@ -756,7 +756,7 @@ def handle_report_value_query(records: dict[str, Any], query: str, language: str
             doc for doc in documents
             if (
                 (getattr(doc, "uploaded_at", None) and doc.uploaded_at.month == requested_month)
-                or any(re.search(r"\\b" + re.escape(alias) + r"\\b", f"{doc.file_name or ''} {doc.extracted_text or ''}".lower()) for alias in month_aliases_for_match)
+                or any(re.search(r"\b" + re.escape(alias) + r"\b", f"{doc.file_name or ''} {doc.extracted_text or ''}".lower()) for alias in month_aliases_for_match)
             )
         ]
         if ("report" in q_low or "document" in q_low) and not matching_documents:
@@ -770,7 +770,7 @@ def handle_report_value_query(records: dict[str, Any], query: str, language: str
                 "answer": answer, "intent": INTENT_REPORT_VALUE_QUERY,
                 "safety_status": "INSUFFICIENT_EVIDENCE", "citations": [],
                 "uncertainty_notes": f"No uploaded document matching {month_name} was found.",
-                "suggested_next_actions": ["Upload the January report if you have it."],
+                "suggested_next_actions": [f"Upload the {month_name} report if you have it."],
                 "provider": "grounded_records_engine", "provider_note": "Report availability was checked separately from stored lab rows.",
                 "documented_facts": [],
             }
