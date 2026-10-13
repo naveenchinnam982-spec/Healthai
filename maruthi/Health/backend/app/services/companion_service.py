@@ -362,9 +362,7 @@ def build_citation(
 
 
 def handle_historical_comparison(records: dict[str, Any], query: str, language: str) -> dict[str, Any]:
-    """
-    Scenario C: Compare matching measurements with validated concept, dates and units.
-    """
+    """Compare stored measurements only when their recorded units match."""
     labs: list[LabResult] = records.get("labs", [])
     patient: Patient = records.get("patient")
 
@@ -389,6 +387,7 @@ def handle_historical_comparison(records: dict[str, Any], query: str, language: 
 
     comparisons = []
     citations = []
+    incompatible_units = []
 
     keys_to_compare = [target_key] if target_key and target_key in tests_by_name else list(tests_by_name.keys())
 
@@ -397,6 +396,11 @@ def handle_historical_comparison(records: dict[str, Any], query: str, language: 
         if len(readings) >= 2:
             first = readings[0]
             latest = readings[-1]
+            first_unit = (first.unit or "").strip().lower()
+            latest_unit = (latest.unit or "").strip().lower()
+            if first_unit != latest_unit:
+                incompatible_units.append(f"{k}: values were not compared because recorded units differ ({first.unit or 'not recorded'} vs {latest.unit or 'not recorded'}).")
+                continue
             diff_note = ""
             try:
                 v1 = float(first.value)
@@ -477,10 +481,10 @@ def handle_historical_comparison(records: dict[str, Any], query: str, language: 
         "intent": INTENT_HISTORICAL_COMPARISON,
         "safety_status": "SAFE",
         "citations": citations,
-        "uncertainty_notes": "Comparisons grounded in reviewed lab result dates and verified unit compatibility.",
+        "uncertainty_notes": "Only same-test readings with matching recorded units are compared; unit-mismatched values are excluded.",
         "suggested_next_actions": ["Review lab trends with doctor during next follow-up."],
         "provider": "grounded_records_engine",
-        "provider_note": "Historical comparison engine with validated unit compatibility.",
+        "provider_note": "Historical comparison uses stored lab values and skips readings with mismatched units.",
         "documented_facts": comparisons,
     }
 
