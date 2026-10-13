@@ -106,7 +106,7 @@ async def upload_document_patient(
 async def upload_document_generic(
     request: Request,
     file: UploadFile = File(...),
-    patient_id: str = Form(...)
+    patient_id: str = Form(...),
     document_type: str | None = Form(None),
     visit_id: str | None = Form(None),
     db: AsyncSession = Depends(get_db),
